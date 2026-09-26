@@ -54,10 +54,7 @@
     ready: false,
     rendered: false,
     tab: "cut",
-    pieces: [],
-    segments: [],
-    relations: [],
-    diagrams: [],
+    cutSubmitted: false,
     picked: "",
     relType: "",
     relPicked: [],
@@ -87,17 +84,26 @@
 
   function ensure() {
     if (S.ready) return;
-    S.pieces = (M.pieces || []).map(function (p) {
-      return { id: p.id, text: p.text, boxed: !!p.boxed };
-    });
-    S.segments = (M.segments || []).map(function (s) {
-      return { id: s.id, text: s.text, type: s.type || "" };
-    });
-    S.relations = (M.relations || []).map(function (r) {
-      return { id: r.id, type: r.type, members: r.members.slice(), formal: r.formal };
-    });
-    S.diagrams = JSON.parse(JSON.stringify(M.diagrams || []));
     S.ready = true;
+    APP.api.loadAnnotation(APP.state.currentTaskId).then(function (d) {
+      APP.store.patch({
+        pieces: (d.pieces || []).map(function (p) {
+          return { id: p.id, text: p.text, boxed: !!p.boxed };
+        }),
+        segments: (d.segments || []).map(function (s) {
+          return { id: s.id, text: s.text, type: s.type || "" };
+        }),
+        relations: (d.relations || []).map(function (r) {
+          return { id: r.id, type: r.type, members: r.members.slice(), formal: r.formal };
+        }),
+        diagrams: d.diagrams || []
+      });
+      S.cutSubmitted = APP.store.get("pieces").length > 0;
+      if (hostRoot && document.body.contains(hostRoot)) {
+        S.rendered = false;
+        renderView(hostRoot, APP.state.params);
+      }
+    });
   }
 
   function tagValue(t) { return t.code || t.name; }
@@ -122,13 +128,13 @@
   }
 
   function segById(id) {
-    for (var i = 0; i < S.segments.length; i++) {
-      if (S.segments[i].id === id) return S.segments[i];
+    for (var i = 0; i < APP.store.get("segments").length; i++) {
+      if (APP.store.get("segments")[i].id === id) return APP.store.get("segments")[i];
     }
     return null;
   }
 
-  function curDiagram() { return S.diagrams[S.dg]; }
+  function curDiagram() { return APP.store.get("diagrams")[S.dg]; }
 
   function bodyEl() { return hostRoot.querySelector(".va-body"); }
 
@@ -207,10 +213,10 @@
     var guide = (APP.data && APP.data.guide) || {};
     var cons = (APP.data && APP.data.consistency) || {};
 
-    var boxed = S.pieces.filter(function (p) { return p.boxed; }).length;
-    var cutPct = S.pieces.length ? Math.round(boxed / S.pieces.length * 100) : 0;
-    var annotated = S.segments.filter(function (s) { return !!s.type; }).length;
-    var annPct = S.segments.length ? Math.round(annotated / S.segments.length * 100) : 0;
+    var boxed = APP.store.get("pieces").filter(function (p) { return p.boxed; }).length;
+    var cutPct = APP.store.get("pieces").length ? Math.round(boxed / APP.store.get("pieces").length * 100) : 0;
+    var annotated = APP.store.get("segments").filter(function (s) { return !!s.type; }).length;
+    var annPct = APP.store.get("segments").length ? Math.round(annotated / APP.store.get("segments").length * 100) : 0;
 
     var KIND_ORDER = ["标签选择", "标注边界", "关系指向"];
     var counts = {};
@@ -232,9 +238,9 @@
     }
 
     var cutRight = '<span class="tag ' + (cutPct >= 100 ? "green" : "amber") + '">' +
-      (cutPct >= 100 ? "已完成" : boxed + " / " + S.pieces.length) + "</span>";
+      (cutPct >= 100 ? "已完成" : boxed + " / " + APP.store.get("pieces").length) + "</span>";
     var elemRight = '<span class="tag ' + (annPct >= 100 ? "green" : "amber") + '">' +
-      annotated + " / " + S.segments.length + "</span>";
+      annotated + " / " + APP.store.get("segments").length + "</span>";
     var diffHtml = diffs.length
       ? '<div class="notice mb12">差异 <b>' + diffs.length + "</b> 处（" + APP.esc(parts.join(" · ")) + "）</div>"
       : '<div class="notice ok mb12">双人结果一致，暂无差异</div>';
@@ -260,8 +266,8 @@
       '<div class="card"><h3>流程阶段</h3>' +
       stageRow("切割", cutRight, cutPct) +
       stageRow("要素标注", elemRight, annPct) +
-      stageRow("关系标注", '<span class="tag green">' + S.relations.length + " 条</span>", 100) +
-      stageRow("图示", '<span class="tag green">' + S.diagrams.length + " 个</span>", 100) +
+      stageRow("关系标注", '<span class="tag green">' + APP.store.get("relations").length + " 条</span>", 100) +
+      stageRow("图示", '<span class="tag green">' + APP.store.get("diagrams").length + " 个</span>", 100) +
       '<div class="notice">当前阶段：' + APP.esc(currentStageText()) + "</div></div>" +
       '<div class="card"><h3>双人标注状态</h3>' +
       '<div class="row mb8"><span class="tag green">已提交</span><span class="small">' +
@@ -281,17 +287,21 @@
   }
 
   function renderCut() {
-    var boxed = S.pieces.filter(function (p) { return p.boxed; }).length;
+    var boxed = APP.store.get("pieces").filter(function (p) { return p.boxed; }).length;
+    var pIdx = 0;
     return '<div class="toolbar">' +
-      '<span class="small muted">已加框要素数：<b class="va-box-count">' + boxed + "</b></span>" +
+      '<span class="small muted">已加框要素数：<b class="va-box-count">' + boxed + "</b> / " + APP.store.get("pieces").length + "</span>" +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="re-extract">重新提取</button>' +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="drag-range">手动拖动调整</button>' +
       "</div>" +
-      '<div class="paper' + (canEdit ? "" : " va-disabled") + '">' + S.pieces.map(function (p) {
-        return '<span class="seg' + (p.boxed ? " boxed" : "") + '" data-piece="' + p.id + '">' + APP.esc(p.text) + "</span>";
+      '<div class="paper' + (canEdit ? "" : " va-disabled") + '">' + APP.store.get("pieces").map(function (p) {
+        if (p.boxed) pIdx++;
+        return '<span class="seg' + (p.boxed ? " boxed" : "") + '" data-piece="' + p.id + '">' +
+          (p.boxed ? '<sup class="no">P' + pIdx + "</sup>" : "") +
+          APP.esc(p.text) + "</span>";
       }).join("") + "</div>" +
       '<div class="row mt12"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-cut">提交切割</button>' +
-      '<span class="small muted">点击文本可加框/去框（示意）</span></div>';
+      '<span class="small muted">点击加框/去框，按原文顺序自动编号 P1, P2, P3…</span></div>';
   }
   function tagButton(t, pickedType, locked) {
     var val = tagValue(t);
@@ -301,13 +311,13 @@
   }
 
   function renderElements() {
-    var annotated = S.segments.filter(function (s) { return !!s.type; });
-    var untyped = S.segments.filter(function (s) { return !s.type; });
+    var annotated = APP.store.get("segments").filter(function (s) { return !!s.type; });
+    var untyped = APP.store.get("segments").filter(function (s) { return !s.type; });
     var picked = segById(S.picked);
     var pickedType = picked ? picked.type : "";
     var tagsLocked = !canEdit && !!picked;
 
-    var left = S.segments.map(function (s) {
+    var left = APP.store.get("segments").map(function (s) {
       var cls = "seg" + (s.type ? " boxed alt" : "") + (s.id === S.picked ? " picked" : "");
       var tip = s.type ? ' title="' + APP.esc(s.id + "：" + tagName(s.type)) + '"' : "";
       return '<span class="' + cls + '" data-seg="' + s.id + '"' + tip + ">" +
@@ -325,14 +335,14 @@
       '<button type="button" class="btn small danger' + (canEdit ? "" : " va-disabled") + '" data-act="delete-elem">删除所选要素</button>' +
       "</div></div>";
 
-    var stat = "共 " + S.segments.length + " 个要素，已标注 " + annotated.length + " 个" +
+    var stat = "共 " + APP.store.get("segments").length + " 个要素，已标注 " + annotated.length + " 个" +
       (untyped.length ? "（" + untyped.map(function (s) { return s.id; }).join("、") + " 未标注）" : "（全部已标注）");
 
     var right = "<div>" +
       '<div class="small muted mb8">' + stat + "</div>" +
       (untyped.length ? '<div class="notice small mb8">仍有 ' + untyped.length + " 个要素未标注：" +
         untyped.map(function (s) { return s.id; }).join("、") + "，请补充类型后再提交。</div>" : "") +
-      '<div class="list">' + S.segments.map(function (s) {
+      '<div class="list">' + APP.store.get("segments").map(function (s) {
         var tip = s.id + "：" + (s.type ? tagName(s.type) : "未标注");
         return '<div class="list-item' + (s.id === S.picked ? " active" : "") + '" data-seg="' + s.id + '" title="' + APP.esc(tip) + '">' +
           '<span class="idx">' + s.id + '</span><span class="txt">' + APP.esc(s.text) + "</span>" +
@@ -348,7 +358,7 @@
 
   function renderRelations() {
     var left = '<div><div class="small muted mb8">选择两个或多个已标注要素（按点击顺序参与形式化表达）</div>' +
-      '<div class="list">' + S.segments.map(function (s) {
+      '<div class="list">' + APP.store.get("segments").map(function (s) {
         var active = S.relPicked.indexOf(s.id) >= 0;
         var disabled = !s.type;
         return '<div class="list-item' + (active ? " active" : "") + (disabled ? " va-disabled" : "") +
@@ -375,7 +385,7 @@
       '<div class="row"><button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="demo-nested">演示嵌套：反对一个支持关系</button></div>' +
       "</div>";
 
-    var rows = S.relations.map(function (r) {
+    var rows = APP.store.get("relations").map(function (r) {
       var rt = relTypeByCode(r.type) || { name: r.type, cls: "gray" };
       return "<tr>" +
         '<td><span class="mono">' + APP.esc(r.id) + "</span>" + (r.demo ? ' <span class="tag violet">演示</span>' : "") + "</td>" +
@@ -450,8 +460,8 @@
   }
 
   function relById(id) {
-    for (var i = 0; i < S.relations.length; i++) {
-      if (S.relations[i].id === id) return S.relations[i];
+    for (var i = 0; i < APP.store.get("relations").length; i++) {
+      if (APP.store.get("relations")[i].id === id) return APP.store.get("relations")[i];
     }
     return null;
   }
@@ -483,10 +493,10 @@
       return cache[id];
     }
 
-    S.relations.forEach(function (r) {
+    APP.store.get("relations").forEach(function (r) {
       pos[r.id] = { id: r.id, kind: relKind(r.type), depth: depthOf(r.id, {}), seq: seq++ };
     });
-    S.relations.forEach(function (r) {
+    APP.store.get("relations").forEach(function (r) {
       r.members.forEach(function (m) {
         if (!pos[m]) pos[m] = { id: m, kind: "", depth: 0, seq: seq++ };
       });
@@ -521,7 +531,7 @@
     });
 
     var edges = [];
-    S.relations.forEach(function (r) {
+    APP.store.get("relations").forEach(function (r) {
       var members = r.members;
       if (r.type === "S" || r.type === "A") {
         edges.push({ from: members[0], to: r.id });
@@ -544,14 +554,14 @@
   function rebuildDiagram() {
     var dg = buildDiagramFromRelations();
     var idx = -1;
-    for (var i = 0; i < S.diagrams.length; i++) {
-      if (S.diagrams[i].generated) { idx = i; break; }
+    for (var i = 0; i < APP.store.get("diagrams").length; i++) {
+      if (APP.store.get("diagrams")[i].generated) { idx = i; break; }
     }
     if (idx < 0) {
-      S.diagrams.push(dg);
-      idx = S.diagrams.length - 1;
+      APP.store.get("diagrams").push(dg);
+      idx = APP.store.get("diagrams").length - 1;
     } else {
-      S.diagrams[idx] = dg;
+      APP.store.get("diagrams")[idx] = dg;
     }
     S.dg = idx;
     paint();
@@ -570,7 +580,7 @@
 
   function renderDiagram() {
     var dg = curDiagram();
-    var subTabs = S.diagrams.map(function (t, i) {
+    var subTabs = APP.store.get("diagrams").map(function (t, i) {
       return '<button type="button" data-dg="' + i + '"' + (i === S.dg ? ' class="active"' : "") + ">" + APP.esc(t.title) + "</button>";
     }).join("");
     var legend = '<div class="legend">' +
@@ -591,7 +601,7 @@
 
   function nextRelId() {
     var max = 0;
-    S.relations.forEach(function (r) {
+    APP.store.get("relations").forEach(function (r) {
       var m = /^R(\d+)$/.exec(r.id);
       if (m) max = Math.max(max, Number(m[1]));
     });
@@ -605,12 +615,10 @@
     }
     var id = el.getAttribute("data-piece");
     var p = null;
-    S.pieces.forEach(function (x) { if (x.id === id) p = x; });
+    APP.store.get("pieces").forEach(function (x) { if (x.id === id) p = x; });
     if (!p) return;
     p.boxed = !p.boxed;
-    el.classList.toggle("boxed", p.boxed);
-    var c = hostRoot.querySelector(".va-box-count");
-    if (c) c.textContent = S.pieces.filter(function (x) { return x.boxed; }).length;
+    paint();
   }
 
   function onTag(val) {
@@ -651,7 +659,7 @@
       APP.ui.toast(READONLY_MSG, "warn");
       return;
     }
-    S.relations = S.relations.filter(function (r) { return r.id !== id; });
+    APP.store.set("relations", APP.store.get("relations").filter(function (r) { return r.id !== id; }));
     APP.ui.toast("已删除关系 " + id + "（演示）");
     if (!afterRelChange()) paint();
   }
@@ -677,7 +685,7 @@
       return;
     }
     var rel = { id: nextRelId(), type: type, members: ids, formal: type + "(" + ids.join(", ") + ")" };
-    S.relations.push(rel);
+    APP.store.get("relations").push(rel);
     S.relPicked = [];
     APP.ui.toast("已生成 " + rel.formal + "（" + rel.id + "）");
     if (!afterRelChange()) paint();
@@ -686,36 +694,77 @@
   function demoNested() {
     var d = M.nestedDemo;
     if (!d) return;
-    var exists = S.relations.some(function (r) { return r.demo && r.formal === d.formal; });
+    var exists = APP.store.get("relations").some(function (r) { return r.demo && r.formal === d.formal; });
     if (exists) {
       APP.ui.toast("嵌套示例已在关系表中（" + d.formal + "）", "warn");
       return;
     }
     var id = d.id;
-    var taken = S.relations.some(function (r) { return r.id === id; });
+    var taken = APP.store.get("relations").some(function (r) { return r.id === id; });
     if (taken) id = nextRelId();
-    S.relations.push({ id: id, type: d.type, members: d.members.slice(), formal: d.formal, demo: true });
+    APP.store.get("relations").push({ id: id, type: d.type, members: d.members.slice(), formal: d.formal, demo: true });
     APP.ui.toast("已添加嵌套关系（关系可指向另一关系）");
     paint();
   }
 
+  function deriveSegmentsFromCut() {
+    if (APP.store.get("segments").length > 0) {
+      APP.store.patch({ segments: [], relations: [], diagrams: [] });
+    }
+    var pIdx = 0;
+    APP.store.get("pieces").forEach(function (p) {
+      if (!p.boxed) return;
+      pIdx++;
+      APP.store.get("segments").push({ id: "P" + pIdx, text: p.text, type: "" });
+    });
+    S.cutSubmitted = true;
+    S.dg = 0;
+    S.picked = "";
+    S.relPicked = [];
+    S.relType = "";
+  }
+
   function submitCut() {
-    var boxed = S.pieces.filter(function (p) { return p.boxed; }).length;
+    var boxed = APP.store.get("pieces").filter(function (p) { return p.boxed; });
+    var count = boxed.length;
+    if (!count) {
+      APP.ui.toast("请先加框至少一个切割片段", "warn");
+      return;
+    }
+    var pNos = boxed.map(function (_, i) {
+      var idx = 0;
+      for (var j = 0; j < APP.store.get("pieces").length; j++) {
+        if (APP.store.get("pieces")[j].boxed) idx++;
+        if (APP.store.get("pieces")[j].id === boxed[i].id) return "P" + idx;
+      }
+      return "";
+    });
+    var range = pNos.length === 1 ? pNos[0] : pNos[0] + "–" + pNos[pNos.length - 1];
+    var diff = Math.min(100, Math.round(Math.abs(count - APP.store.get("pieces").length) / APP.store.get("pieces").length * 100));
+    var passed = diff <= 10;
+
     APP.ui.modal({
-      title: "提交切割 · 与标准切割对比",
-      body: "<p>与标准切割对比：差异度 <b>6%</b>（演示值，阈值 10%）—— <span class='ok-text'>通过</span></p>" +
-        '<p class="small">当前加框 ' + boxed + " / " + S.pieces.length + " 个切割片段。</p>" +
-        '<p class="muted small">双人独立切割后由仲裁员比较，差异度≤10% 才能进入下一步。</p>' +
-        '<p class="muted small">若差异度&gt;10%，需按仲裁意见重新切割后再次提交。</p>',
+      title: "提交切割",
+      body: "<p>当前切割：<b>" + count + " 个</b>要素片段（" + APP.esc(range) + "）</p>" +
+        '<p>模拟比对差异度：<b>' + diff + '%</b>（阈值 10%）—— ' +
+        (passed ? "<span class='ok-text'>通过 ✓</span>" : "<span class='err-text'>超过阈值</span>") + "</p>" +
+        '<p class="small muted">' + (passed
+          ? "差异度在 10% 以内，可以进入要素标注阶段。"
+          : "差异度超过 10%，建议返回调整切割后再提交。") + "</p>" +
+        '<p class="small muted">提交后将根据加框结果自动生成要素序号（P1, P2, P3…），进入要素标注阶段。</p>',
       actions: [
-        { label: "关闭" },
-        { label: "确认提交", kind: "primary", onClick: function () { APP.ui.toast("切割已提交（演示）"); } }
+        { label: "返回调整", kind: "" },
+        { label: "确认提交", kind: "primary", onClick: function () {
+          deriveSegmentsFromCut();
+          setTab("elements");
+          APP.ui.toast("切割已提交，自动生成 " + count + " 个要素（P1–P" + count + "），请进入要素标注补充类型", "ok");
+        } }
       ]
     });
   }
 
   function submitElements() {
-    var un = S.segments.filter(function (s) { return !s.type; });
+    var un = APP.store.get("segments").filter(function (s) { return !s.type; });
     if (!un.length) {
       APP.ui.toast("要素标注已提交（演示）");
       return;
@@ -738,9 +787,9 @@
       APP.ui.toast("请先选择要删除的要素", "warn");
       return;
     }
-    var related = S.relations.filter(function (r) { return r.members.indexOf(s.id) >= 0; });
+    var related = APP.store.get("relations").filter(function (r) { return r.members.indexOf(s.id) >= 0; });
     APP.ui.confirm("确定删除要素 " + s.id + " 吗？", function () {
-      S.segments = S.segments.filter(function (x) { return x.id !== s.id; });
+      APP.store.set("segments", APP.store.get("segments").filter(function (x) { return x.id !== s.id; }));
       var i = S.relPicked.indexOf(s.id);
       if (i >= 0) S.relPicked.splice(i, 1);
       S.picked = "";
@@ -898,7 +947,7 @@
       return;
     }
     if (params && TAB_IDS.indexOf(params.mode) >= 0) S.tab = params.mode;
-    else if (!S.rendered) S.tab = "cut";
+    else if (!S.rendered) S.tab = S.cutSubmitted ? (APP.store.get("segments").filter(function (s) { return s.type; }).length ? "relations" : "elements") : "cut";
     S.rendered = true;
     APP.state.annotateMode = S.tab;
     root.innerHTML =
