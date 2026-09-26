@@ -6,6 +6,8 @@
   window.APP = window.APP || {};
   window.APP.api = {
     loadAnnotation: function (taskId) {
+      var draft = window.APP.persist && window.APP.persist.load(taskId);
+      if (draft) return ok(draft);
       var m = window.MOCK || {};
       return ok({
         pieces: m.pieces || [],

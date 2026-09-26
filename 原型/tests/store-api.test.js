@@ -86,5 +86,46 @@ async function test(name, fn) {
     assert.strictEqual(r.saved, true);
   });
 
+  console.log("persist.js");
+  // Node 环境垫片：localStorage / document / APP.state
+  const mem = {};
+  global.localStorage = {
+    getItem: (k) => (k in mem ? mem[k] : null),
+    setItem: (k, v) => { mem[k] = String(v); },
+    removeItem: (k) => { delete mem[k]; }
+  };
+  global.document = { querySelector: () => null };
+  global.APP = global.window.APP;
+  global.APP.state = { currentTaskId: "T1" };
+  require(path.join(__dirname, "..", "src", "persist.js"));
+  const { persist } = global.window.APP;
+
+  await test("save/load 往返一致", () => {
+    store.patch({ pieces: [{ id: "s9", boxed: false }], relations: [{ id: "R9" }] });
+    persist.save("TEST");
+    const d = persist.load("TEST");
+    assert.strictEqual(d.pieces[0].id, "s9");
+    assert.strictEqual(d.relations[0].id, "R9");
+    assert.ok(d.savedAt > 0);
+  });
+  await test("clear 后 load 返回 null", () => {
+    persist.save("TMP");
+    persist.clear("TMP");
+    assert.strictEqual(persist.load("TMP"), null);
+  });
+  await test("api.loadAnnotation 优先返回草稿", async () => {
+    const d = await api.loadAnnotation("TEST");
+    assert.strictEqual(d.pieces[0].id, "s9");
+    const m = await api.loadAnnotation("无草稿任务");
+    assert.strictEqual(m.pieces[0].text, "原文片段");
+  });
+  await test("无草稿/无 MOCK 时返回空数组", async () => {
+    const m = global.window.MOCK;
+    global.window.MOCK = null;
+    const d = await api.loadAnnotation("空空如也");
+    global.window.MOCK = m;
+    assert.deepStrictEqual(d.pieces, []);
+  });
+
   console.log("\n" + passed + " passed" + (process.exitCode ? ", 有失败" : ""));
 })();
