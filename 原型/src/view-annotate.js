@@ -787,18 +787,64 @@
       APP.ui.toast("请先选择要删除的要素", "warn");
       return;
     }
-    var related = APP.store.get("relations").filter(function (r) { return r.members.indexOf(s.id) >= 0; });
-    APP.ui.confirm("确定删除要素 " + s.id + " 吗？", function () {
-      APP.store.set("segments", APP.store.get("segments").filter(function (x) { return x.id !== s.id; }));
-      var i = S.relPicked.indexOf(s.id);
-      if (i >= 0) S.relPicked.splice(i, 1);
-      S.picked = "";
-      if (related.length) {
-        APP.ui.toast(s.id + " 存在 " + related.length + " 条关联关系，正式流程需一并处理（示意）", "warn");
-      } else {
-        APP.ui.toast("已删除要素 " + s.id + "（演示）");
+    var res = APP.annotateLogic.computeDeletion({
+      segments: APP.store.get("segments"),
+      relations: APP.store.get("relations"),
+      diagrams: APP.store.get("diagrams")
+    }, s.id);
+
+    var n = APP.store.get("segments").length;
+    var num = parseInt(s.id.slice(1), 10);
+    var body = "<p>删除要素 <b>" + APP.esc(s.id) + "</b> 后，后续要素将按原文顺序自动重编号" +
+      (num < n ? "（P" + (num + 1) + "–P" + n + " → P" + num + "–P" + (n - 1) + "）" : "") + "。</p>";
+
+    if (res.removed.length || res.modified.length) {
+      body += '<div class="notice info small mt12"><b>对已建立关系的影响：</b></div>';
+      if (res.removed.length) {
+        body += '<div class="small mt8">以下关系将一并删除：</div><ul class="small mt4">' +
+          res.removed.map(function (r) {
+            return "<li><span class='code-chip'>" + APP.esc(r.id) + "</span> " + APP.esc(r.formal) +
+              '<span class="muted"> — ' + APP.esc(r.reason) + "</span></li>";
+          }).join("") + "</ul>";
       }
-      paint();
+      if (res.modified.length) {
+        body += '<div class="small mt8">以下关系的成员编号将同步更新：</div><ul class="small mt4">' +
+          res.modified.map(function (r) {
+            return "<li><span class='code-chip'>" + APP.esc(r.id) + "</span> " +
+              APP.esc(r.before) + " → <b>" + APP.esc(r.after) + "</b></li>";
+          }).join("") + "</ul>";
+      }
+    } else {
+      body += '<p class="small muted mt8">该要素未参与任何关系。</p>';
+    }
+    body += '<p class="small muted mt8">论证图示中该命题节点及相关连线将同步移除。</p>';
+
+    APP.ui.modal({
+      title: "删除要素 " + s.id,
+      body: body,
+      actions: [
+        { label: "取消" },
+        {
+          label: "确认删除", kind: "primary", onClick: function () {
+            APP.store.patch({
+              segments: res.segments,
+              relations: res.relations,
+              diagrams: res.diagrams
+            });
+            S.picked = "";
+            var removedIds = {};
+            res.removed.forEach(function (r) { removedIds[r.id] = true; });
+            S.relPicked = S.relPicked.filter(function (id) {
+              return id !== s.id && !removedIds[id];
+            }).map(function (id) {
+              return id.charAt(0) === "P" && res.pmap[id] ? res.pmap[id] : id;
+            });
+            paint();
+            var msg = "已删除 " + s.id + "，后续要素已重编号";
+            APP.ui.toast(res.removed.length ? msg + "；" + res.removed.length + " 条关系已一并删除" : msg, res.removed.length ? "warn" : "ok");
+          }
+        }
+      ]
     });
   }
 
