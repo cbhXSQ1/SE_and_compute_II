@@ -4,7 +4,7 @@
   var READONLY_MSG = "只读模式：当前角色不能修改标注";
   var READONLY_BLOCKED = {
     "submit": true,
-    "re-extract": true, "drag-range": true, "submit-cut": true,
+    "re-extract": true, "suggest-cut": true, "drag-range": true, "submit-cut": true,
     "pre-number": true, "delete-elem": true, "submit-elements": true,
     "make-rel": true,
     "rebuild-diagram": true, "submit-diagram": true
@@ -292,6 +292,7 @@
     return '<div class="toolbar">' +
       '<span class="small muted">已加框要素数：<b class="va-box-count">' + boxed + "</b> / " + APP.store.get("pieces").length + "</span>" +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="re-extract">重新提取</button>' +
+      '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="suggest-cut">按规则预切割</button>' +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="drag-range">手动拖动调整</button>' +
       "</div>" +
       '<div class="paper' + (canEdit ? "" : " va-disabled") + '">' + APP.store.get("pieces").map(function (p) {
@@ -771,6 +772,56 @@
     S.relType = "";
   }
 
+  function suggestCut() {
+    if (!canEdit) {
+      APP.ui.toast(READONLY_MSG, "warn");
+      return;
+    }
+    var text = (M.doc && M.doc.reasonText) || "";
+    var res = APP.annotateLogic.suggestCut(text);
+    if (!res.pieces.length) {
+      APP.ui.toast("未找到可切割文本", "warn");
+      return;
+    }
+    var willReset = APP.store.get("segments").length > 0;
+    var rows = res.pieces.map(function (p, i) {
+      return "<tr><td class='mono'>" + (i + 1) + "</td><td>" + APP.esc(p.text) + "</td><td>" +
+        p.rules.map(function (r) { return '<span class="tag violet">' + APP.esc(r) + "</span>"; }).join(" ") +
+        "</td></tr>";
+    }).join("");
+    APP.ui.modal({
+      title: "按《指南》规则预切割",
+      body: '<p class="small muted">系统已执行四条机械规则：①句号（。！？）为界首切；②句内按逗号、分号切出子句；③双引号内容整体保留；④过渡语（如“本院认为，”“本案中，”“综上所述，”）并入其后第一个子句' +
+        (res.mergedTransitions ? "（本次并入 <b>" + res.mergedTransitions + "</b> 处）" : "") + '。</p>' +
+        '<p class="small"><b>规则②的语义判定不自动执行</b>：连续子句若为同一性质且相互间无支持/反对关系，应合并为一个要素，请在应用后人工合并（点击去框即可）。</p>' +
+        (willReset ? '<div class="notice small mb8"><b>注意：</b>切割已提交并进入后续阶段，应用预切割将清空已生成的要素、关系与图示，需重新标注。</div>' : "") +
+        '<p class="small muted">共生成 <b>' + res.pieces.length + '</b> 个建议片段（默认全部加框）：</p>' +
+        '<div style="max-height:38vh;overflow:auto;border:1px solid var(--border,#ddd);border-radius:6px">' +
+        '<table class="table va-rel-table"><thead><tr><th style="width:36px">#</th><th>建议片段</th><th style="width:170px">依据</th></tr></thead>' +
+        "<tbody>" + rows + "</tbody></table></div>",
+      actions: [
+        { label: "取消", kind: "" },
+        {
+          label: "应用预切割", kind: "primary", onClick: function () {
+            APP.store.set("pieces", res.pieces.map(function (p, i) {
+              return { id: "s" + (i + 1), text: p.text, boxed: true };
+            }));
+            if (willReset) {
+              APP.store.patch({ segments: [], relations: [], diagrams: [] });
+              S.cutSubmitted = false;
+              S.dg = 0;
+              S.picked = "";
+              S.relPicked = [];
+              S.relType = "";
+            }
+            paint();
+            APP.ui.toast("已按规则预切割为 " + res.pieces.length + " 个片段，请人工核对/合并后提交", "ok");
+          }
+        }
+      ]
+    });
+  }
+
   function submitCut() {
     var boxed = APP.store.get("pieces").filter(function (p) { return p.boxed; });
     var count = boxed.length;
@@ -921,6 +972,7 @@
     if (name === "save") { APP.ui.toast("已保存到草稿"); return; }
     if (name === "submit") { APP.ui.toast(APP.state.practice ? "已提交练习（演示）" : "已提交（演示）"); return; }
     if (name === "re-extract") { APP.ui.toast("已按指南重新提取切割片段（演示）"); return; }
+    if (name === "suggest-cut") { suggestCut(); return; }
     if (name === "drag-range") { APP.ui.pending("手动拖动调整切割范围"); return; }
     if (name === "submit-cut") { submitCut(); return; }
     if (name === "pre-number") { APP.ui.toast("已启用「先编号后补标签」（演示）：新要素可暂缺类型，编号保留，待后续补标"); return; }

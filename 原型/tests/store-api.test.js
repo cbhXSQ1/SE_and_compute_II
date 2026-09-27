@@ -220,5 +220,45 @@ async function test(name, fn) {
     assert.strictEqual(buildNestedDemo("nope", demoSegs(4), 1).error, "未知嵌套形式");
   });
 
+  console.log("annotate-logic.js · 切割规则辅助");
+  const { suggestCut } = global.window.APP.annotateLogic;
+  await test("规则1：按句号首切，标点保留在片段末尾", () => {
+    const r = suggestCut("第一句。第二句！第三句？");
+    assert.deepStrictEqual(r.pieces.map(p => p.text), ["第一句。", "第二句！", "第三句？"]);
+    assert.ok(r.pieces.every(p => p.rules.includes("句号为界")));
+  });
+  await test("规则2：句内按逗号、分号切出子句", () => {
+    const r = suggestCut("甲方应付款，乙方应交货；双方均无异议。");
+    assert.deepStrictEqual(r.pieces.map(p => p.text), ["甲方应付款，", "乙方应交货；", "双方均无异议。"]);
+    assert.ok(r.pieces[0].rules.includes("逗号/分号子句"));
+    assert.ok(r.pieces[1].rules.includes("逗号/分号子句"));
+    assert.ok(r.pieces[2].rules.includes("句号为界"));
+  });
+  await test("规则3：双引号内容整体保留，内部逗号不切断", () => {
+    const r = suggestCut("合同约定“先付款，后交货”，双方照此履行。");
+    const quote = r.pieces.find(p => p.text.indexOf("“") >= 0);
+    assert.ok(quote, "应存在含引号片段");
+    assert.strictEqual(quote.text, "合同约定“先付款，后交货”，");
+    assert.ok(quote.rules.includes("引号整体"));
+  });
+  await test("规则4：过渡语并入其后第一个子句", () => {
+    const r = suggestCut("本案中，双方存在合同关系。因此，被告应付款。");
+    assert.deepStrictEqual(r.pieces.map(p => p.text), ["本案中，双方存在合同关系。", "因此，被告应付款。"]);
+    assert.strictEqual(r.mergedTransitions, 2);
+    assert.ok(r.pieces[0].rules.includes("过渡语并入后一要素"));
+  });
+  await test("文末过渡语无子句可并入时不产生空片段", () => {
+    const r = suggestCut("陈述完毕。综上，");
+    assert.deepStrictEqual(r.pieces.map(p => p.text), ["陈述完毕。", "综上，"]);
+  });
+  await test("mock 裁判理由文本可完整切割且无空白片段", () => {
+    const r = suggestCut(global.window.MOCK.doc.reasonText);
+    assert.ok(r.pieces.length >= 10);
+    assert.ok(r.pieces.every(p => p.text.trim().length > 0));
+    assert.strictEqual(r.pieces[0].text.indexOf("本院认为，"), 0);
+    assert.strictEqual(r.pieces[r.pieces.length - 1].text, "判决如下：");
+    assert.ok(r.mergedTransitions >= 2);
+  });
+
   console.log("\n" + passed + " passed" + (process.exitCode ? ", 有失败" : ""));
 })();

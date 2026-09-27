@@ -184,10 +184,74 @@
     return { rels: rels };
   }
 
+  // ===== 文本切割规则辅助（依需求 2.1.5 /《指南》四条规则）=====
+  // 规则1：句号（含！？）为界第一次切割；规则3：双引号内容整体保留不被标点切断；
+  // 规则2：句内按逗号、分号切出子句（同性质子句是否合并需人工判断，不自动合并）；
+  // 规则4：过渡语与其后第一个子句切在一起。
+  var TRANSITIONS = ["理由如下", "综上所述", "综上来看", "据此", "因此", "所以", "由此", "本院认为", "本案中"];
+
+  function splitKeepPunct(s, re) {
+    var out = [], buf = "";
+    for (var i = 0; i < s.length; i++) {
+      buf += s[i];
+      if (re.test(s[i])) { out.push(buf); buf = ""; }
+    }
+    if (buf) out.push(buf);
+    return out;
+  }
+
+  function suggestCut(rawText) {
+    var text = String(rawText == null ? "" : rawText);
+    // 规则3：占位保护双引号整体
+    var quotes = [];
+    var safe = text.replace(/“[^”]*”/g, function (m) { quotes.push(m); return "\u0001" + (quotes.length - 1) + "\u0002"; });
+    var restore = function (t) {
+      return t.replace(/\u0001(\d+)\u0002/g, function (_, i) { return quotes[Number(i)]; });
+    };
+
+    // 规则1：句末标点为界；规则2：句内逗号/分号再切
+    var units = [];
+    splitKeepPunct(safe, /[。！？!?]/).forEach(function (sent) {
+      if (!sent) return;
+      splitKeepPunct(sent, /[，；,;]/).forEach(function (p) { if (p) units.push(p); });
+    });
+
+    var rulesOf = function (u, extra) {
+      var rules = extra ? extra.slice() : [];
+      var plain = restore(u);
+      var tail = plain.slice(-1);
+      if (plain.indexOf("“") >= 0 || plain.indexOf("”") >= 0) rules.push("引号整体");
+      if (/[。！？!?]$/.test(plain)) rules.push("句号为界");
+      if (/[，；,;]$/.test(tail)) rules.push("逗号/分号子句");
+      return rules;
+    };
+
+    var pieces = [];
+    var mergedTransitions = 0;
+    for (var i = 0; i < units.length; i++) {
+      var u = units[i];
+      // 规则4：仅由过渡语 + 逗号/冒号构成的子句，并入后一子句
+      var head = restore(u).trim().replace(/[，：:]$/, "");
+      var isTransition = /[，：:]$/.test(restore(u).trim()) && TRANSITIONS.indexOf(head) >= 0;
+      if (isTransition && i + 1 < units.length) {
+        u += units[i + 1];
+        i++;
+        mergedTransitions++;
+        pieces.push({ text: restore(u), rules: rulesOf(u, ["过渡语并入后一要素"]) });
+      } else {
+        var t = restore(u);
+        if (t.trim()) pieces.push({ text: t, rules: rulesOf(u, null) });
+      }
+    }
+    return { pieces: pieces, quoteCount: quotes.length, mergedTransitions: mergedTransitions };
+  }
+
   window.APP = window.APP || {};
   window.APP.annotateLogic = {
     computeDeletion: computeDeletion,
     expandFormal: expandFormal,
+    suggestCut: suggestCut,
+    TRANSITIONS: TRANSITIONS,
     NESTED_DEMO_ORDER: NESTED_DEMO_ORDER,
     NESTED_DEMO_PATTERNS: NESTED_DEMO_PATTERNS,
     buildNestedDemo: buildNestedDemo
