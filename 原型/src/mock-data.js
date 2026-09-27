@@ -93,7 +93,6 @@ window.MOCK = {
     { id: "R9", type: "A", members: ["P11", "P10"], formal: "A(P11, P10)" },
     { id: "R10", type: "S", members: ["P11", "P13"], formal: "S(P11, P13)" }
   ],
-  nestedDemo: { id: "R11", type: "A", members: ["P11", "R8"], formal: "A(P11, S(P10, P12))", demo: true },
   diagrams: [
     {
       id: "dg1", title: "论证一（11000 元请求）",

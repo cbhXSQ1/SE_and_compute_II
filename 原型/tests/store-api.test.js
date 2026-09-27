@@ -184,5 +184,41 @@ async function test(name, fn) {
     assert.strictEqual(computeDeletion({ segments: mkSegs(2), relations: [], diagrams: [] }, "P9"), null);
   });
 
+  console.log("annotate-logic.js · 嵌套演示");
+  const { buildNestedDemo, NESTED_DEMO_PATTERNS, NESTED_DEMO_ORDER } = global.window.APP.annotateLogic;
+  const demoSegs = n => Array.from({ length: n }, (_, i) => "P" + (i + 1));
+  const cases = {
+    "J-in-M": ["M(J(P1, P2), P3)", 2, "R20", "R21"],
+    "M-in-J": ["J(M(P1, P3), M(P2, P4))", 3, "R20", "R22"],
+    "J-in-S": ["S(J(P1, P2), P3)", 2, "R20", "R21"],
+    "M-in-S": ["S(M(P1, P2), P3)", 2, "R20", "R21"],
+    "S-in-A": ["A(P3, S(P1, P2))", 2, "R20", "R21"],
+    multi: ["S(M(J(P1, P2), P3), P4)", 3, "R20", "R22"]
+  };
+  for (const key of NESTED_DEMO_ORDER) {
+    await test("嵌套演示 " + NESTED_DEMO_PATTERNS[key].name + "：" + cases[key][0], () => {
+      const [formal, count, firstId, lastId] = cases[key];
+      const r = buildNestedDemo(key, demoSegs(4), 20);
+      assert.strictEqual(r.error, undefined);
+      assert.strictEqual(r.rels.length, count);
+      assert.strictEqual(r.rels[0].id, firstId);
+      assert.strictEqual(r.rels[count - 1].id, lastId);
+      assert.strictEqual(r.rels[count - 1].formal, formal);
+      assert.ok(r.rels.every(x => x.demo === true && x.demoKey === key));
+    });
+  }
+  await test("嵌套演示：M-in-J 外层成员为两个内层 M 关系", () => {
+    const r = buildNestedDemo("M-in-J", demoSegs(4), 1);
+    assert.deepStrictEqual(r.rels[2].members, ["R1", "R2"]);
+  });
+  await test("嵌套演示：要素不足返回 error.need", () => {
+    const r = buildNestedDemo("multi", ["P1", "P2"], 1);
+    assert.strictEqual(r.rels, undefined);
+    assert.strictEqual(r.need, 4);
+  });
+  await test("嵌套演示：未知形式返回 error", () => {
+    assert.strictEqual(buildNestedDemo("nope", demoSegs(4), 1).error, "未知嵌套形式");
+  });
+
   console.log("\n" + passed + " passed" + (process.exitCode ? ", 有失败" : ""));
 })();

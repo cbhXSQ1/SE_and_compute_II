@@ -131,9 +131,65 @@
     };
   }
 
+  // ===== 嵌套关系演示（依《指南》六种嵌套形式）=====
+  // step.members：数字 = 取用 segIds 的第几个要素；"@k" = 引用第 k 个内层关系
+  var NESTED_DEMO_ORDER = ["J-in-M", "M-in-J", "J-in-S", "M-in-S", "S-in-A", "multi"];
+  var NESTED_DEMO_PATTERNS = {
+    "J-in-M": {
+      name: "组合内嵌于匹配", expr: "M(J(ps1, ps2), pg)", need: 3,
+      steps: [{ type: "J", members: [0, 1] }, { type: "M", members: ["@0", 2] }]
+    },
+    "M-in-J": {
+      name: "匹配内嵌于组合", expr: "J(M(ps1, pg1), M(ps2, pg2))", need: 4,
+      steps: [{ type: "M", members: [0, 2] }, { type: "M", members: [1, 3] }, { type: "J", members: ["@0", "@1"] }]
+    },
+    "J-in-S": {
+      name: "组合内嵌于支持", expr: "S(J(pi1, pi2), pj)", need: 3,
+      steps: [{ type: "J", members: [0, 1] }, { type: "S", members: ["@0", 2] }]
+    },
+    "M-in-S": {
+      name: "匹配内嵌于支持", expr: "S(M(ps, pg), pj)", need: 3,
+      steps: [{ type: "M", members: [0, 1] }, { type: "S", members: ["@0", 2] }]
+    },
+    "S-in-A": {
+      name: "支持内嵌于反对", expr: "A(po, S(pi, pj))", need: 3,
+      steps: [{ type: "S", members: [0, 1] }, { type: "A", members: [2, "@0"] }]
+    },
+    multi: {
+      name: "多层嵌套", expr: "S(M(J(ps1, ps2), pg), pj)", need: 4,
+      steps: [{ type: "J", members: [0, 1] }, { type: "M", members: ["@0", 2] }, { type: "S", members: ["@1", 3] }]
+    }
+  };
+
+  // 生成一整套嵌套演示关系（内层→外层），id 从 R{startNum} 起连续编号
+  function buildNestedDemo(key, segIds, startNum) {
+    var p = NESTED_DEMO_PATTERNS[key];
+    if (!p) return { error: "未知嵌套形式" };
+    if (!segIds || segIds.length < p.need) return { error: "要素不足", need: p.need };
+    var chosen = segIds.slice(0, p.need);
+    var rels = [];
+    p.steps.forEach(function (st) {
+      rels.push({
+        id: "R" + (startNum + rels.length),
+        type: st.type,
+        members: st.members.map(function (m) {
+          return typeof m === "number" ? chosen[m] : rels[Number(m.slice(1))].id;
+        }),
+        formal: "",
+        demo: true,
+        demoKey: key
+      });
+    });
+    rels.forEach(function (r) { r.formal = expandFormal(r, rels); });
+    return { rels: rels };
+  }
+
   window.APP = window.APP || {};
   window.APP.annotateLogic = {
     computeDeletion: computeDeletion,
-    expandFormal: expandFormal
+    expandFormal: expandFormal,
+    NESTED_DEMO_ORDER: NESTED_DEMO_ORDER,
+    NESTED_DEMO_PATTERNS: NESTED_DEMO_PATTERNS,
+    buildNestedDemo: buildNestedDemo
   };
 })();

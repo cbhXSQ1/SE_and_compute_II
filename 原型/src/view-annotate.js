@@ -6,7 +6,7 @@
     "submit": true,
     "re-extract": true, "drag-range": true, "submit-cut": true,
     "pre-number": true, "delete-elem": true, "submit-elements": true,
-    "make-rel": true, "demo-nested": true,
+    "make-rel": true,
     "rebuild-diagram": true, "submit-diagram": true
   };
 
@@ -382,7 +382,7 @@
         ? S.relPicked.map(function (id) { return '<span class="code-chip">' + APP.esc(id) + "</span>"; }).join(" ")
         : '<span class="muted">未选择</span>') + "</div>" +
       '<div class="row"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="make-rel">生成关系</button></div>' +
-      '<div class="row"><button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="demo-nested">演示嵌套：反对一个支持关系</button></div>' +
+      nestedDemoHtml() +
       "</div>";
 
     var rows = APP.store.get("relations").map(function (r) {
@@ -659,8 +659,19 @@
       APP.ui.toast(READONLY_MSG, "warn");
       return;
     }
-    APP.store.set("relations", APP.store.get("relations").filter(function (r) { return r.id !== id; }));
-    APP.ui.toast("已删除关系 " + id + "（演示）");
+    var rels = APP.store.get("relations");
+    var target = null;
+    rels.forEach(function (r) { if (r.id === id) target = r; });
+    if (target && target.demoKey) {
+      var key = target.demoKey;
+      var p = APP.annotateLogic.NESTED_DEMO_PATTERNS[key];
+      var n = rels.filter(function (r) { return r.demoKey === key; }).length;
+      APP.store.set("relations", rels.filter(function (r) { return r.demoKey !== key; }));
+      APP.ui.toast("已删除整套「" + (p ? p.name : key) + "」演示（" + n + " 条关系）");
+    } else {
+      APP.store.set("relations", rels.filter(function (r) { return r.id !== id; }));
+      APP.ui.toast("已删除关系 " + id + "（演示）");
+    }
     if (!afterRelChange()) paint();
   }
 
@@ -691,20 +702,56 @@
     if (!afterRelChange()) paint();
   }
 
-  function demoNested() {
-    var d = M.nestedDemo;
-    if (!d) return;
-    var exists = APP.store.get("relations").some(function (r) { return r.demo && r.formal === d.formal; });
-    if (exists) {
-      APP.ui.toast("嵌套示例已在关系表中（" + d.formal + "）", "warn");
+  // 《指南》六种嵌套形式演示：一键插入整套关系链（内层→外层）
+  function nestedDemoHtml() {
+    var L = APP.annotateLogic;
+    var inserted = {};
+    APP.store.get("relations").forEach(function (r) { if (r.demoKey) inserted[r.demoKey] = true; });
+    var btns = L.NESTED_DEMO_ORDER.map(function (key) {
+      var p = L.NESTED_DEMO_PATTERNS[key];
+      var done = !!inserted[key];
+      return '<button type="button" class="btn small' + ((canEdit && !done) ? "" : " va-disabled") +
+        '" data-demo-key="' + key + '" title="' + APP.esc(p.expr) + (done ? "（已插入）" : "") + '">' +
+        APP.esc(p.name) + "</button>";
+    }).join("");
+    return '<div class="small muted mt8">嵌套关系演示（依《指南》六种形式，悬停看形式化表达）：</div>' +
+      '<div class="tag-options">' + btns + "</div>";
+  }
+
+  function addNestedDemo(key) {
+    if (!canEdit) {
+      APP.ui.toast(READONLY_MSG, "warn");
       return;
     }
-    var id = d.id;
-    var taken = APP.store.get("relations").some(function (r) { return r.id === id; });
-    if (taken) id = nextRelId();
-    APP.store.get("relations").push({ id: id, type: d.type, members: d.members.slice(), formal: d.formal, demo: true });
-    APP.ui.toast("已添加嵌套关系（关系可指向另一关系）");
-    paint();
+    var L = APP.annotateLogic;
+    var p = L.NESTED_DEMO_PATTERNS[key];
+    if (!p) return;
+    var rels = APP.store.get("relations");
+    if (rels.some(function (r) { return r.demoKey === key; })) {
+      APP.ui.toast("「" + p.name + "」演示已在关系表中", "warn");
+      return;
+    }
+    var segs = APP.store.get("segments");
+    var typed = segs.filter(function (s) { return !!s.type; });
+    var pool = (typed.length >= p.need ? typed : segs).slice(0, p.need).map(function (s) { return s.id; });
+    if (pool.length < p.need) {
+      APP.ui.toast("当前要素不足，该形式至少需要 " + p.need + " 个要素", "warn");
+      return;
+    }
+    var max = 0;
+    rels.forEach(function (r) {
+      var m = /^R(\d+)$/.exec(r.id);
+      if (m) max = Math.max(max, Number(m[1]));
+    });
+    var res = L.buildNestedDemo(key, pool, max + 1);
+    if (res.error) {
+      APP.ui.toast(res.error, "warn");
+      return;
+    }
+    res.rels.forEach(function (r) { rels.push(r); });
+    APP.store.touch("relations");
+    APP.ui.toast("已插入「" + p.name + "」演示：" + res.rels[res.rels.length - 1].formal);
+    if (!afterRelChange()) paint();
   }
 
   function deriveSegmentsFromCut() {
@@ -880,7 +927,6 @@
     if (name === "delete-elem") { deleteElem(); return; }
     if (name === "submit-elements") { submitElements(); return; }
     if (name === "make-rel") { makeRel(); return; }
-    if (name === "demo-nested") { demoNested(); return; }
     if (name === "rebuild-diagram") { rebuildDiagram(); APP.ui.toast("已按关系表重建图示（演示）"); return; }
     if (name === "exit-practice") {
       APP.state.practice = false;
@@ -972,6 +1018,8 @@
     if (t) { S.picked = t.getAttribute("data-seg"); paint(); return; }
     t = e.target.closest ? e.target.closest("button[data-del-rel]") : null;
     if (t) { delRel(t.getAttribute("data-del-rel")); return; }
+    t = e.target.closest ? e.target.closest("button[data-demo-key]") : null;
+    if (t) { addNestedDemo(t.getAttribute("data-demo-key")); return; }
     t = e.target.closest ? e.target.closest("button[data-dg]") : null;
     if (t) { S.dg = Number(t.getAttribute("data-dg")) || 0; paint(); return; }
   }
