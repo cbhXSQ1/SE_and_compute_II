@@ -827,9 +827,9 @@
   }
 
   // 阶段历史：每次正式提交压入一个只读快照（内存保存，刷新即清空；与草稿分离）
-  function recordStage(stage) {
+  function recordStage(stage, note) {
     var hist = APP.store.get("history");
-    var v = APP.annotateLogic.makeSnapshot(APP.store.get(), stage, APP.roleName(), hist.length + 1);
+    var v = APP.annotateLogic.makeSnapshot(APP.store.get(), stage, APP.roleName(), hist.length + 1, note);
     hist.push(v);
     APP.store.touch("history");
     return v;
@@ -843,30 +843,144 @@
       " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
   }
 
+  function shortText(t, n) {
+    n = n || 22;
+    return t.length > n ? t.slice(0, n) + "…" : t;
+  }
+
   function showHistory() {
     var hist = APP.store.get("history");
     var body;
     if (!hist.length) {
       body = '<p class="small muted">暂无历史版本。各阶段（文本切割、要素标注、关系标注、论证图示）每次正式提交后，系统会自动保存一个只读快照，供仲裁追溯与过程复现。</p>' +
-        '<p class="small muted">说明：历史版本仅保存于本次会话内存中（原型演示），不随草稿持久化；只能查看，不能回滚。</p>';
+        '<p class="small muted">说明：历史版本仅保存于本次会话内存中（原型演示），不随草稿持久化。</p>';
     } else {
       var rows = hist.slice().reverse().map(function (v) {
         return "<tr><td class='mono'>" + v.id + "</td>" +
-          "<td><span class='tag violet'>" + APP.esc(v.stageName) + "</span></td>" +
+          "<td><span class='tag violet'>" + APP.esc(v.stageName) + "</span>" +
+          (v.note ? '<div class="small muted">' + APP.esc(v.note) + "</div>" : "") + "</td>" +
           "<td class='small'>" + fmtTs(v.ts) + "</td>" +
           "<td class='small'>" + APP.esc(v.operator) + "</td>" +
           "<td class='small muted'>片段 " + v.counts.pieces + " · 要素 " + v.counts.segments +
-          " · 关系 " + v.counts.relations + " · 图示 " + v.counts.diagrams + "</td></tr>";
+          " · 关系 " + v.counts.relations + " · 图示 " + v.counts.diagrams + "</td>" +
+          "<td><button type='button' class='btn small' data-hist-ver='" + v.seq + "'>查看差异</button></td></tr>";
       }).join("");
-      body = '<p class="small muted">共 <b>' + hist.length + "</b> 个已提交版本（最新在上）。历史版本只读，不可回滚；最终结果以最后一次提交为准。</p>" +
+      body = '<p class="small muted">共 <b>' + hist.length + "</b> 个已提交版本（最新在上）。点「查看差异」可看该版本相对上一版的具体变化，标注员可在确认后回滚（回滚前会自动备份当前状态）。</p>" +
         '<div style="max-height:46vh;overflow:auto;border:1px solid var(--border,#ddd);border-radius:6px">' +
-        '<table class="table va-rel-table"><thead><tr><th style="width:52px">版本</th><th style="width:96px">阶段</th><th style="width:160px">提交时间</th><th style="width:96px">操作者</th><th>内容统计</th></tr></thead>' +
+        '<table class="table va-rel-table"><thead><tr><th style="width:52px">版本</th><th style="width:120px">阶段</th><th style="width:150px">提交时间</th><th style="width:80px">操作者</th><th>内容统计</th><th style="width:86px">操作</th></tr></thead>' +
         "<tbody>" + rows + "</tbody></table></div>";
     }
     APP.ui.modal({
       title: "历史版本（各阶段提交留痕）",
       body: body,
       actions: [{ label: "关闭", kind: "primary" }]
+    });
+    var modalEl = document.getElementById("modal-root");
+    if (modalEl && !modalEl._histBound) {
+      modalEl._histBound = true;
+      modalEl.addEventListener("click", function (e) {
+        var t = e.target.closest ? e.target.closest("button[data-hist-ver]") : null;
+        if (t) showVersionDetail(Number(t.getAttribute("data-hist-ver")));
+      });
+    }
+  }
+
+  function diffBlockHtml(title, items, render) {
+    if (!items.length) return "";
+    return '<div class="small mt8"><b>' + title + "（" + items.length + "）</b><ul class='small mt4'>" +
+      items.map(render).join("") + "</ul></div>";
+  }
+
+  function showVersionDetail(seq) {
+    var hist = APP.store.get("history");
+    var idx = -1;
+    hist.forEach(function (v, i) { if (v.seq === seq) idx = i; });
+    if (idx < 0) return;
+    var v = hist[idx];
+    var prevSnap = idx > 0 ? hist[idx - 1].snapshot : null;
+    var d = APP.annotateLogic.diffStates(prevSnap, v.snapshot);
+    var esc = APP.esc;
+    var chip = function (cls, t) { return '<span class="tag ' + cls + '">' + esc(t) + "</span>"; };
+
+    var body = '<p class="small">版本 <b>' + v.id + '</b> · ' + chip("violet", v.stageName) +
+      " · " + fmtTs(v.ts) + " · 操作者 " + esc(v.operator) + "</p>" +
+      (v.note ? '<p class="small muted">' + esc(v.note) + "</p>" : "") +
+      '<p class="small muted">相对 ' + (idx > 0 ? "上一版 " + hist[idx - 1].id : "空初始状态") + " 的具体变化：</p>";
+
+    if (!d.hasChanges) {
+      body += '<div class="notice small">与上一版内容完全相同（无数据变化）。</div>';
+    } else {
+      body += diffBlockHtml("切割：新加框片段", d.pieces.boxedAdded, function (t) {
+        return "<li>" + chip("green", "加框") + " " + esc(shortText(t, 40)) + "</li>";
+      });
+      body += diffBlockHtml("切割：取消加框片段", d.pieces.boxedRemoved, function (t) {
+        return "<li>" + chip("amber", "去框") + " " + esc(shortText(t, 40)) + "</li>";
+      });
+      body += diffBlockHtml("要素：新增", d.segments.added, function (id) {
+        return "<li><span class='code-chip'>" + esc(id) + "</span></li>";
+      });
+      body += diffBlockHtml("要素：删除（后续自动重编号）", d.segments.removed, function (id) {
+        return "<li><span class='code-chip'>" + esc(id) + "</span></li>";
+      });
+      body += diffBlockHtml("要素：类型标注/修改", d.segments.typeChanged, function (c) {
+        return "<li><span class='code-chip'>" + esc(c.id) + "</span> " + esc(c.before) +
+          ' <span class="muted">→</span> ' + chip("green", c.after) + "</li>";
+      });
+      body += diffBlockHtml("关系：新增", d.relations.added, function (r) {
+        return "<li><span class='code-chip'>" + esc(r.id) + "</span> " + esc(r.formal) + "</li>";
+      });
+      body += diffBlockHtml("关系：删除（级联）", d.relations.removed, function (r) {
+        return "<li><span class='code-chip'>" + esc(r.id) + "</span> " + esc(r.formal) + "</li>";
+      });
+      body += diffBlockHtml("关系：形式化表达更新", d.relations.changed, function (r) {
+        return "<li><span class='code-chip'>" + esc(r.id) + "</span> " + esc(r.before) +
+          ' <span class="muted">→</span> ' + esc(r.after) + "</li>";
+      });
+      body += diffBlockHtml("图示：新增/删除", d.diagrams.added.concat(d.diagrams.removed), function (id) {
+        return "<li><span class='code-chip'>" + esc(id) + "</span></li>";
+      });
+    }
+
+    var actions = [{
+      label: "返回列表", kind: "", onClick: function () { showHistory(); return false; }
+    }];
+    if (canEdit) actions.push({ label: "回滚到此版本", kind: "primary", onClick: function () { confirmRollback(v); return false; } });
+    APP.ui.modal({
+      title: "版本差异 " + v.id + "（" + v.stageName + "）",
+      body: body,
+      actions: actions
+    });
+  }
+
+  function confirmRollback(v) {
+    if (!canEdit) {
+      APP.ui.toast(READONLY_MSG, "warn");
+      return;
+    }
+    APP.ui.modal({
+      title: "回滚确认：恢复到 " + v.id,
+      body: "<p>将把当前工作区数据恢复为版本 <b>" + v.id + "（" + APP.esc(v.stageName) + "，" + fmtTs(v.ts) +
+        "）</b> 时的内容，并停留在该阶段。</p>" +
+        '<div class="notice small mb8"><b>非破坏式回滚：</b>系统会先把<b>当前状态</b>自动另存为一个「回滚前备份」版本，之后再覆盖工作区；若回滚有误，可在历史列表中再滚回该备份。</div>' +
+        '<p class="small muted">回滚后切割/要素/关系/图示四类数据都会回到当时状态，可继续编辑并重新提交。</p>',
+      actions: [
+        { label: "取消", kind: "" },
+        {
+          label: "确认回滚", kind: "primary", onClick: function () {
+            var backup = recordStage("backup", "回滚到 " + v.id + " 前的自动备份");
+            var snap = JSON.parse(JSON.stringify(v.snapshot));
+            APP.store.patch(snap);
+            S.cutSubmitted = snap.pieces.some(function (p) { return p.boxed; });
+            S.picked = "";
+            S.relPicked = [];
+            S.relType = "";
+            S.dg = 0;
+            setTab(v.stage === "backup" ? "cut" : v.stage);
+            paint();
+            APP.ui.toast("已回滚到 " + v.id + "；当前旧状态已备份为 " + backup.id, "ok");
+          }
+        }
+      ]
     });
   }
 

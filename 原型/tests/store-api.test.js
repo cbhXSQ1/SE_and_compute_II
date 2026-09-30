@@ -297,5 +297,54 @@ async function test(name, fn) {
     assert.deepStrictEqual(v.counts, { pieces: 0, segments: 0, relations: 0, diagrams: 0 });
   });
 
+  console.log("annotate-logic.js · 相邻版本差异对比");
+  const { diffStates } = global.window.APP.annotateLogic;
+  const base = {
+    pieces: [{ id: "s1", text: "甲句。", boxed: true }, { id: "s2", text: "乙句。", boxed: false }],
+    segments: [{ id: "P1", text: "甲句。", type: "SF" }, { id: "P2", text: "乙句。", type: "" }],
+    relations: [{ id: "R1", type: "S", members: ["P1", "P2"], formal: "S(P1, P2)" }],
+    diagrams: [{ id: "dg1", nodes: [] }]
+  };
+  await test("V1 对空基线：全部识别为新增/加框", () => {
+    const d = diffStates(null, base);
+    assert.ok(d.hasChanges);
+    assert.strictEqual(d.pieces.boxedAdded.length, 1);
+    assert.deepStrictEqual(d.segments.added, ["P1", "P2"]);
+    assert.deepStrictEqual(d.relations.added.map(r => r.id), ["R1"]);
+    assert.deepStrictEqual(d.diagrams.added, ["dg1"]);
+  });
+  await test("要素类型标注：空→SF 记入 typeChanged", () => {
+    const cur = JSON.parse(JSON.stringify(base));
+    cur.segments[1].type = "GF";
+    const d = diffStates(base, cur);
+    assert.strictEqual(d.segments.typeChanged.length, 1);
+    assert.deepStrictEqual(d.segments.typeChanged[0], { id: "P2", before: "未标注", after: "GF" });
+  });
+  await test("删除要素重编号：P2 消失记入 removed，存活关系 formal 更新记入 changed", () => {
+    const cur = {
+      pieces: base.pieces,
+      segments: [{ id: "P1", text: "甲句。", type: "SF" }],
+      relations: [{ id: "R1", type: "S", members: ["P1"], formal: "S(P1)" }],
+      diagrams: base.diagrams
+    };
+    const d = diffStates(base, cur);
+    assert.deepStrictEqual(d.segments.removed, ["P2"]);
+    assert.strictEqual(d.relations.changed[0].id, "R1");
+    assert.strictEqual(d.relations.changed[0].after, "S(P1)");
+  });
+  await test("切割调整按文本比对加框集合，id 重排不影响", () => {
+    const cur = {
+      pieces: [{ id: "x1", text: "甲句。", boxed: true }, { id: "x2", text: "乙句。", boxed: true }, { id: "x3", text: "丙句。", boxed: false }],
+      segments: base.segments, relations: base.relations, diagrams: base.diagrams
+    };
+    const d = diffStates(base, cur);
+    assert.deepStrictEqual(d.pieces.boxedAdded, ["乙句。"]);
+    assert.strictEqual(d.pieces.boxedAfter, 2);
+  });
+  await test("两版完全一致时 hasChanges 为 false", () => {
+    const d = diffStates(base, JSON.parse(JSON.stringify(base)));
+    assert.strictEqual(d.hasChanges, false);
+  });
+
   console.log("\n" + passed + " passed" + (process.exitCode ? ", 有失败" : ""));
 })();

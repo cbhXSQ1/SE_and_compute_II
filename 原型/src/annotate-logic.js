@@ -251,11 +251,12 @@
     cut: "文本切割",
     elements: "要素标注",
     relations: "关系标注",
-    diagram: "论证图示"
+    diagram: "论证图示",
+    backup: "回滚前备份"
   };
 
-  // 每次阶段提交生成一个只读快照版本（提交级，非操作级）
-  function makeSnapshot(state, stage, operator, seq) {
+  // 每次阶段提交生成一个只读快照版本（提交级，非操作级）；note 用于回滚备份等标记
+  function makeSnapshot(state, stage, operator, seq, note) {
     var pieces = (state && state.pieces) || [];
     var segments = (state && state.segments) || [];
     var relations = (state && state.relations) || [];
@@ -267,6 +268,7 @@
       stageName: STAGE_NAMES[stage] || stage,
       operator: operator || "",
       ts: new Date().toISOString(),
+      note: note || "",
       counts: {
         pieces: pieces.filter(function (p) { return p.boxed; }).length,
         segments: segments.length,
@@ -279,6 +281,75 @@
     };
   }
 
+  // 相邻版本自动对比：prev 为 null 时以全空状态为基线（用于 V1）
+  function diffStates(prev, cur) {
+    prev = prev || { pieces: [], segments: [], relations: [], diagrams: [] };
+    cur = cur || { pieces: [], segments: [], relations: [], diagrams: [] };
+    var norm = function (x) { return x || []; };
+    var out = {
+      pieces: { boxedBefore: 0, boxedAfter: 0, boxedAdded: [], boxedRemoved: [] },
+      segments: { added: [], removed: [], typeChanged: [] },
+      relations: { added: [], removed: [], changed: [] },
+      diagrams: { before: 0, after: 0, added: [], removed: [] },
+      hasChanges: false
+    };
+    var mark = function () { out.hasChanges = true; };
+
+    // 切割片段：重新预切割会重排 id，故按文本比对加框集合
+    var pPrev = {}, pCur = {};
+    norm(prev.pieces).forEach(function (p) { pPrev[p.text] = !!p.boxed; });
+    norm(cur.pieces).forEach(function (p) { pCur[p.text] = !!p.boxed; });
+    Object.keys(pPrev).forEach(function (t) { if (pPrev[t]) out.pieces.boxedBefore++; });
+    Object.keys(pCur).forEach(function (t) { if (pCur[t]) out.pieces.boxedAfter++; });
+    Object.keys(pCur).forEach(function (t) {
+      if (pCur[t] && !pPrev[t]) { out.pieces.boxedAdded.push(t); mark(); }
+    });
+    Object.keys(pPrev).forEach(function (t) {
+      if (pPrev[t] && !pCur[t]) { out.pieces.boxedRemoved.push(t); mark(); }
+    });
+
+    // 要素：按 id 比对存在性与类型
+    var sPrev = {}, sCur = {};
+    norm(prev.segments).forEach(function (s) { sPrev[s.id] = s; });
+    norm(cur.segments).forEach(function (s) { sCur[s.id] = s; });
+    Object.keys(sCur).forEach(function (id) {
+      if (!sPrev[id]) { out.segments.added.push(id); mark(); }
+      else if ((sPrev[id].type || "") !== (sCur[id].type || "")) {
+        out.segments.typeChanged.push({ id: id, before: sPrev[id].type || "未标注", after: sCur[id].type || "未标注" });
+        mark();
+      }
+    });
+    Object.keys(sPrev).forEach(function (id) {
+      if (!sCur[id]) { out.segments.removed.push(id); mark(); }
+    });
+
+    // 关系：按 id 比对；formal 变了即记为修改（含重编号/嵌套重算）
+    var rPrev = {}, rCur = {};
+    norm(prev.relations).forEach(function (r) { rPrev[r.id] = r; });
+    norm(cur.relations).forEach(function (r) { rCur[r.id] = r; });
+    Object.keys(rCur).forEach(function (id) {
+      if (!rPrev[id]) { out.relations.added.push({ id: id, formal: rCur[id].formal }); mark(); }
+      else if (rPrev[id].formal !== rCur[id].formal) {
+        out.relations.changed.push({ id: id, before: rPrev[id].formal, after: rCur[id].formal });
+        mark();
+      }
+    });
+    Object.keys(rPrev).forEach(function (id) {
+      if (!rCur[id]) { out.relations.removed.push({ id: id, formal: rPrev[id].formal }); mark(); }
+    });
+
+    // 图示：按 id 比对
+    var dPrev = {}, dCur = {};
+    norm(prev.diagrams).forEach(function (d) { dPrev[d.id] = d; });
+    norm(cur.diagrams).forEach(function (d) { dCur[d.id] = d; });
+    out.diagrams.before = norm(prev.diagrams).length;
+    out.diagrams.after = norm(cur.diagrams).length;
+    Object.keys(dCur).forEach(function (id) { if (!dPrev[id]) { out.diagrams.added.push(id); mark(); } });
+    Object.keys(dPrev).forEach(function (id) { if (!dCur[id]) { out.diagrams.removed.push(id); mark(); } });
+
+    return out;
+  }
+
   window.APP = window.APP || {};
   window.APP.annotateLogic = {
     computeDeletion: computeDeletion,
@@ -286,6 +357,7 @@
     suggestCut: suggestCut,
     TRANSITIONS: TRANSITIONS,
     makeSnapshot: makeSnapshot,
+    diffStates: diffStates,
     STAGE_NAMES: STAGE_NAMES,
     NESTED_DEMO_ORDER: NESTED_DEMO_ORDER,
     NESTED_DEMO_PATTERNS: NESTED_DEMO_PATTERNS,
