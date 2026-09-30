@@ -3,7 +3,8 @@
     pieces: [],
     segments: [],
     relations: [],
-    diagrams: []
+    diagrams: [],
+    history: []
   };
   var subs = [];
 

@@ -6,7 +6,7 @@
     "submit": true,
     "re-extract": true, "suggest-cut": true, "drag-range": true, "submit-cut": true,
     "pre-number": true, "delete-elem": true, "submit-elements": true,
-    "make-rel": true,
+    "make-rel": true, "submit-relations": true,
     "rebuild-diagram": true, "submit-diagram": true
   };
 
@@ -96,7 +96,8 @@
         relations: (d.relations || []).map(function (r) {
           return { id: r.id, type: r.type, members: r.members.slice(), formal: r.formal };
         }),
-        diagrams: d.diagrams || []
+        diagrams: d.diagrams || [],
+        history: []
       });
       S.cutSubmitted = APP.store.get("pieces").length > 0;
       if (hostRoot && document.body.contains(hostRoot)) {
@@ -189,6 +190,7 @@
       '<span class="tag gray">指南 ' + APP.esc(guide) + "</span>" +
       (canEdit ? "" : '<span class="tag gray">只读模式</span>') +
       '<button type="button" class="tag green" data-act="save">已保存</button>' +
+      '<button type="button" class="btn small" data-act="show-history">历史版本</button>' +
       (practice ? '<span class="tag violet">练习模式</span>' +
         '<button type="button" class="btn small" data-act="exit-practice">退出练习</button>' : "") +
       '<button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit">' + (practice ? "提交练习" : "提交") + "</button>" +
@@ -401,6 +403,8 @@
       '<table class="table va-rel-table"><thead><tr><th>编号</th><th>类型</th><th>成员</th><th>形式化表达</th><th></th></tr></thead>' +
       "<tbody>" + (rows || '<tr><td colspan="5" class="muted">暂无关系</td></tr>') + "</tbody></table>" +
       '<div class="notice info mt12">独立支持与组合支持不可混同：分别独立支持写作多条 S(pi, pj)；合取支持写作 S(J(...), pj)。</div>' +
+      '<div class="row mt12"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-relations">提交关系标注</button>' +
+      '<span class="small muted">提交后留痕为历史版本，可在右上角「历史版本」查看</span></div>' +
       "</div>";
 
     return '<div class="workbench">' + left + mid + right + "</div>";
@@ -822,6 +826,50 @@
     });
   }
 
+  // 阶段历史：每次正式提交压入一个只读快照（内存保存，刷新即清空；与草稿分离）
+  function recordStage(stage) {
+    var hist = APP.store.get("history");
+    var v = APP.annotateLogic.makeSnapshot(APP.store.get(), stage, APP.roleName(), hist.length + 1);
+    hist.push(v);
+    APP.store.touch("history");
+    return v;
+  }
+
+  function fmtTs(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    function p(n) { return n < 10 ? "0" + n : "" + n; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  function showHistory() {
+    var hist = APP.store.get("history");
+    var body;
+    if (!hist.length) {
+      body = '<p class="small muted">暂无历史版本。各阶段（文本切割、要素标注、关系标注、论证图示）每次正式提交后，系统会自动保存一个只读快照，供仲裁追溯与过程复现。</p>' +
+        '<p class="small muted">说明：历史版本仅保存于本次会话内存中（原型演示），不随草稿持久化；只能查看，不能回滚。</p>';
+    } else {
+      var rows = hist.slice().reverse().map(function (v) {
+        return "<tr><td class='mono'>" + v.id + "</td>" +
+          "<td><span class='tag violet'>" + APP.esc(v.stageName) + "</span></td>" +
+          "<td class='small'>" + fmtTs(v.ts) + "</td>" +
+          "<td class='small'>" + APP.esc(v.operator) + "</td>" +
+          "<td class='small muted'>片段 " + v.counts.pieces + " · 要素 " + v.counts.segments +
+          " · 关系 " + v.counts.relations + " · 图示 " + v.counts.diagrams + "</td></tr>";
+      }).join("");
+      body = '<p class="small muted">共 <b>' + hist.length + "</b> 个已提交版本（最新在上）。历史版本只读，不可回滚；最终结果以最后一次提交为准。</p>" +
+        '<div style="max-height:46vh;overflow:auto;border:1px solid var(--border,#ddd);border-radius:6px">' +
+        '<table class="table va-rel-table"><thead><tr><th style="width:52px">版本</th><th style="width:96px">阶段</th><th style="width:160px">提交时间</th><th style="width:96px">操作者</th><th>内容统计</th></tr></thead>' +
+        "<tbody>" + rows + "</tbody></table></div>";
+    }
+    APP.ui.modal({
+      title: "历史版本（各阶段提交留痕）",
+      body: body,
+      actions: [{ label: "关闭", kind: "primary" }]
+    });
+  }
+
   function submitCut() {
     var boxed = APP.store.get("pieces").filter(function (p) { return p.boxed; });
     var count = boxed.length;
@@ -854,8 +902,9 @@
         { label: "返回调整", kind: "" },
         { label: "确认提交", kind: "primary", onClick: function () {
           deriveSegmentsFromCut();
+          var v = recordStage("cut");
           setTab("elements");
-          APP.ui.toast("切割已提交，自动生成 " + count + " 个要素（P1–P" + count + "），请进入要素标注补充类型", "ok");
+          APP.ui.toast("切割已提交，自动生成 " + count + " 个要素（P1–P" + count + "），已留痕为历史版本 " + v.id, "ok");
         } }
       ]
     });
@@ -864,7 +913,8 @@
   function submitElements() {
     var un = APP.store.get("segments").filter(function (s) { return !s.type; });
     if (!un.length) {
-      APP.ui.toast("要素标注已提交（演示）");
+      var v = recordStage("elements");
+      APP.ui.toast("要素标注已提交，已留痕为历史版本 " + v.id + "（演示）");
       return;
     }
     APP.ui.modal({
@@ -874,7 +924,10 @@
         "</ul><p class='warn-text'>存在未标注要素，正式流程应补齐后再提交；原型中可继续提交以便演示。</p>",
       actions: [
         { label: "返回修改" },
-        { label: "仍然提交", kind: "primary", onClick: function () { APP.ui.toast("已提交（含未标注要素，演示）"); } }
+        { label: "仍然提交", kind: "primary", onClick: function () {
+          var v2 = recordStage("elements");
+          APP.ui.toast("已提交（含未标注要素，演示），已留痕为历史版本 " + v2.id);
+        } }
       ]
     });
   }
@@ -946,6 +999,22 @@
     });
   }
 
+  function submitRelations() {
+    var n = APP.store.get("relations").length;
+    APP.ui.modal({
+      title: "提交关系标注",
+      body: "<p>当前关系表共 <b>" + n + "</b> 条关系（含嵌套关系的内层关系）。</p>" +
+        '<p class="small muted">提交后该阶段结果将留痕为历史版本，供仲裁员审查与过程复现；提交后仍可返回修改，再次提交会生成新版本。</p>',
+      actions: [
+        { label: "取消" },
+        { label: "确认提交", kind: "primary", onClick: function () {
+          var v = recordStage("relations");
+          APP.ui.toast("关系标注已提交，已留痕为历史版本 " + v.id);
+        } }
+      ]
+    });
+  }
+
   function submitDiagram() {
     APP.ui.modal({
       title: "提交仲裁员审查",
@@ -955,7 +1024,10 @@
         "<li><b>遗漏</b>：命题与关系是否完整呈现</li></ul>",
       actions: [
         { label: "取消" },
-        { label: "确认提交", kind: "primary", onClick: function () { APP.ui.toast("已提交仲裁员审查"); } }
+        { label: "确认提交", kind: "primary", onClick: function () {
+          var v = recordStage("diagram");
+          APP.ui.toast("已提交仲裁员审查，已留痕为历史版本 " + v.id);
+        } }
       ]
     });
   }
@@ -979,6 +1051,8 @@
     if (name === "delete-elem") { deleteElem(); return; }
     if (name === "submit-elements") { submitElements(); return; }
     if (name === "make-rel") { makeRel(); return; }
+    if (name === "submit-relations") { submitRelations(); return; }
+    if (name === "show-history") { showHistory(); return; }
     if (name === "rebuild-diagram") { rebuildDiagram(); APP.ui.toast("已按关系表重建图示（演示）"); return; }
     if (name === "exit-practice") {
       APP.state.practice = false;

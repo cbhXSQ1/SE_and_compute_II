@@ -260,5 +260,42 @@ async function test(name, fn) {
     assert.ok(r.mergedTransitions >= 2);
   });
 
+  console.log("annotate-logic.js · 阶段历史版本");
+  const { makeSnapshot, STAGE_NAMES } = global.window.APP.annotateLogic;
+  const histState = () => ({
+    pieces: [{ id: "s1", boxed: true }, { id: "s2", boxed: false }],
+    segments: [{ id: "P1", type: "SF" }],
+    relations: [{ id: "R1", type: "S" }],
+    diagrams: [{ id: "dg1" }],
+    history: [{ fake: true }]
+  });
+  await test("快照含编号/阶段/操作者/时间/统计", () => {
+    const v = makeSnapshot(histState(), "cut", "标注员", 1);
+    assert.strictEqual(v.id, "V1");
+    assert.strictEqual(v.seq, 1);
+    assert.strictEqual(v.stage, "cut");
+    assert.strictEqual(v.stageName, STAGE_NAMES.cut);
+    assert.strictEqual(v.operator, "标注员");
+    assert.ok(!isNaN(Date.parse(v.ts)));
+    assert.deepStrictEqual(v.counts, { pieces: 1, segments: 1, relations: 1, diagrams: 1 });
+  });
+  await test("快照为深拷贝：提交后再改状态不影响已存版本", () => {
+    const st = histState();
+    const v = makeSnapshot(st, "elements", "x", 2);
+    st.segments.push({ id: "P2" });
+    st.relations[0].type = "A";
+    assert.strictEqual(v.snapshot.segments.length, 1);
+    assert.strictEqual(v.snapshot.relations[0].type, "S");
+  });
+  await test("快照内容不含 history 本身，避免无限膨胀", () => {
+    const v = makeSnapshot(histState(), "diagram", "x", 3);
+    assert.strictEqual(v.snapshot.history, undefined);
+    assert.deepStrictEqual(Object.keys(v.snapshot).sort(), ["diagrams", "pieces", "relations", "segments"]);
+  });
+  await test("空状态也能生成快照且统计为 0", () => {
+    const v = makeSnapshot({}, "relations", "", 1);
+    assert.deepStrictEqual(v.counts, { pieces: 0, segments: 0, relations: 0, diagrams: 0 });
+  });
+
   console.log("\n" + passed + " passed" + (process.exitCode ? ", 有失败" : ""));
 })();

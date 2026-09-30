@@ -246,12 +246,47 @@
     return { pieces: pieces, quoteCount: quotes.length, mergedTransitions: mergedTransitions };
   }
 
+  // ===== 阶段历史版本（需求 2.1.5 / 2.1.10：各阶段提交快照，供追溯与复现）=====
+  var STAGE_NAMES = {
+    cut: "文本切割",
+    elements: "要素标注",
+    relations: "关系标注",
+    diagram: "论证图示"
+  };
+
+  // 每次阶段提交生成一个只读快照版本（提交级，非操作级）
+  function makeSnapshot(state, stage, operator, seq) {
+    var pieces = (state && state.pieces) || [];
+    var segments = (state && state.segments) || [];
+    var relations = (state && state.relations) || [];
+    var diagrams = (state && state.diagrams) || [];
+    return {
+      id: "V" + seq,
+      seq: seq,
+      stage: stage,
+      stageName: STAGE_NAMES[stage] || stage,
+      operator: operator || "",
+      ts: new Date().toISOString(),
+      counts: {
+        pieces: pieces.filter(function (p) { return p.boxed; }).length,
+        segments: segments.length,
+        relations: relations.length,
+        diagrams: diagrams.length
+      },
+      snapshot: JSON.parse(JSON.stringify({
+        pieces: pieces, segments: segments, relations: relations, diagrams: diagrams
+      }))
+    };
+  }
+
   window.APP = window.APP || {};
   window.APP.annotateLogic = {
     computeDeletion: computeDeletion,
     expandFormal: expandFormal,
     suggestCut: suggestCut,
     TRANSITIONS: TRANSITIONS,
+    makeSnapshot: makeSnapshot,
+    STAGE_NAMES: STAGE_NAMES,
     NESTED_DEMO_ORDER: NESTED_DEMO_ORDER,
     NESTED_DEMO_PATTERNS: NESTED_DEMO_PATTERNS,
     buildNestedDemo: buildNestedDemo
