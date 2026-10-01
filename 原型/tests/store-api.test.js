@@ -455,5 +455,39 @@ async function test(name, fn) {
     assert.strictEqual(buildRelation(exist, "R2", "P1", "P2", "M").ok, true);
   });
 
+  console.log("annotate-logic.js · 切割差异度（双人比对，阈值 10%）");
+  const { computeCutDiff, visibleTasks } = global.window.APP.annotateLogic;
+  await test("差异度：切割完全一致为 0%", () => {
+    assert.strictEqual(computeCutDiff(["甲句。", "乙句。"], ["甲句。", "乙句。"], "甲句。乙句。"), 0);
+  });
+  await test("差异度：无共同边界为 100%", () => {
+    assert.strictEqual(computeCutDiff(["甲句。乙句。", "丙句。"], ["甲句。", "乙句。丙句。"], "甲句。乙句。丙句。"), 100);
+  });
+  await test("差异度：mock 双人切割仅在 P3 分合不同，差异度落在阈值内", () => {
+    const cuts = global.window.MOCK.cuts.T1.D1;
+    const d = computeCutDiff(cuts["刘标注"], cuts["陈标注"], global.window.MOCK.docData.D1.reasonText);
+    assert.ok(d > 0 && d <= 10, "差异度应在 (0, 10] 之间，实际 " + d);
+  });
+
+  console.log("annotate-logic.js · 任务隔离（按当前用户角色过滤）");
+  const ts = global.window.MOCK.tasks;
+  await test("管理员可见全部任务", () => {
+    assert.strictEqual(visibleTasks(ts, { name: "李管理", role: "admin" }).length, 4);
+  });
+  await test("教师/学生仅见教学练习", () => {
+    assert.deepStrictEqual(visibleTasks(ts, { name: "赵老师", role: "teacher" }).map(t => t.id), ["T4"]);
+    assert.deepStrictEqual(visibleTasks(ts, { name: "张三", role: "student" }).map(t => t.id), ["T4"]);
+  });
+  await test("标注员仅见分配给自己的正式任务", () => {
+    assert.deepStrictEqual(visibleTasks(ts, { name: "刘标注", role: "annotator" }).map(t => t.id), ["T1", "T2", "T3"]);
+    assert.deepStrictEqual(visibleTasks(ts, { name: "张三", role: "annotator" }).map(t => t.id), []);
+  });
+  await test("仲裁员仅见指定给自己的任务", () => {
+    assert.deepStrictEqual(visibleTasks(ts, { name: "王仲裁", role: "adjudicator" }).map(t => t.id), ["T1", "T2", "T3"]);
+  });
+  await test("领域专家仅见待裁定任务", () => {
+    assert.deepStrictEqual(visibleTasks(ts, { name: "孙专家", role: "expert" }).map(t => t.id), ["T2"]);
+  });
+
   console.log("\n" + passed + " passed" + (process.exitCode ? ", 有失败" : ""));
 })();

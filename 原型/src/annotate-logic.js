@@ -475,11 +475,66 @@
     return { ok: true, rel: { id: nextId, type: type, members: [a, b], formal: type + "(" + a + ", " + b + ")" } };
   }
 
+  // ===== 切割差异度（需求 2.1.5：双人独立切割后由仲裁员比较，阈值 10%）=====
+  // 量化定义：以「要素边界」的 Dice 距离衡量两份切割的差异。
+  //   - 一份切割的要素边界 = 每个加框片段在原文中的起/止字符位置（去重）。
+  //   - 差异度 = (1 − 2×|边界A ∩ 边界B| / (|边界A| + |边界B|)) × 100%，四舍五入取整。
+  //   - 0% = 边界完全一致；100% = 无共同边界。合并/拆分一个相邻要素分别减少/增加一个边界。
+  function boundaryOffsets(cut, reasonText) {
+    var offs = {};
+    var pos = 0;
+    (cut || []).forEach(function (x) {
+      var t = String(x && x.text != null ? x.text : x);
+      var idx = reasonText.indexOf(t, pos);
+      if (idx < 0) return; // 未在原文定位到的片段不计（防脏数据）
+      if (idx > 0) offs[idx] = true;
+      if (idx + t.length < reasonText.length) offs[idx + t.length] = true;
+      pos = idx + t.length;
+    });
+    return Object.keys(offs).map(Number);
+  }
+
+  function computeCutDiff(cutA, cutB, reasonText) {
+    var text = String(reasonText == null ? "" : reasonText);
+    var A = boundaryOffsets(cutA, text);
+    var B = boundaryOffsets(cutB, text);
+    if (!A.length && !B.length) return 0;
+    var inB = {};
+    B.forEach(function (o) { inB[o] = true; });
+    var shared = 0;
+    A.forEach(function (o) { if (inB[o]) shared++; });
+    return Math.round((1 - 2 * shared / (A.length + B.length)) * 100);
+  }
+
+  // ===== 任务隔离（需求 2.1.1/2.1.2：各角色仅见自己职责范围内的任务）=====
+  // 返回当前用户可见的任务列表（不修改入参）。user: { name, role }。
+  function visibleTasks(tasks, user) {
+    var name = (user && user.name) || "";
+    var role = (user && user.role) || "";
+    if (role === "admin") return tasks.slice();
+    if (role === "teacher") return tasks.filter(function (t) { return t.teaching; });
+    if (role === "student") return tasks.filter(function (t) { return t.teaching; });
+    if (role === "annotator") {
+      return tasks.filter(function (t) {
+        return !t.teaching && (t.annotators || []).indexOf(name) >= 0;
+      });
+    }
+    if (role === "adjudicator") {
+      return tasks.filter(function (t) { return !t.teaching && t.adjudicator === name; });
+    }
+    if (role === "expert") {
+      return tasks.filter(function (t) { return !t.teaching && t.status === "待裁定"; });
+    }
+    return tasks.slice();
+  }
+
   window.APP = window.APP || {};
   window.APP.annotateLogic = {
     computeDeletion: computeDeletion,
     expandFormal: expandFormal,
     suggestCut: suggestCut,
+    computeCutDiff: computeCutDiff,
+    visibleTasks: visibleTasks,
     TRANSITIONS: TRANSITIONS,
     makeSnapshot: makeSnapshot,
     diffStates: diffStates,

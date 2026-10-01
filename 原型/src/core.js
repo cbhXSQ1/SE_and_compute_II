@@ -1,6 +1,7 @@
 window.APP = (function () {
   var state = {
     role: "admin",
+    currentUserId: "u1",
     view: "tasks",
     params: {},
     currentTaskId: "T1",
@@ -80,8 +81,10 @@ window.APP = (function () {
 
   function renderTopbar() {
     var topbar = document.getElementById("topbar");
-    var roleOptions = Object.keys(ROLE_NAMES).map(function (k) {
-      return '<option value="' + k + '"' + (k === state.role ? " selected" : "") + ">" + ROLE_NAMES[k] + "</option>";
+    var users = (window.MOCK && window.MOCK.users) || [];
+    var userOptions = users.map(function (u) {
+      return '<option value="' + u.id + '"' + (u.id === state.currentUserId ? " selected" : "") + ">" +
+        esc(u.name) + "（" + esc(u.role) + "）</option>";
     }).join("");
     topbar.innerHTML =
       '<div class="brand">法律论证标注系统<small>原型 · 裁判文书论证结构标注</small></div>' +
@@ -94,9 +97,14 @@ window.APP = (function () {
       "</nav>" +
       '<div class="spacer"></div>' +
       '<span class="chip"><span class="dot"></span>指南 ' + esc((window.MOCK && window.MOCK.guide.version) || "v1.2") + "</span>" +
-      '<div class="role-select">当前角色<select id="role-switch">' + roleOptions + "</select></div>";
+      '<div class="role-select">当前用户<select id="role-switch">' + userOptions + "</select></div>";
     document.getElementById("role-switch").addEventListener("change", function (e) {
-      state.role = e.target.value;
+      var uid = e.target.value;
+      var u = null;
+      users.forEach(function (x) { if (x.id === uid) u = x; });
+      if (!u) return;
+      state.currentUserId = u.id;
+      state.role = roleCode(u.role);
       renderTopbar();
       if (canView(state.view)) goto(state.view, state.params);
       else goto("tasks");
@@ -188,6 +196,25 @@ window.APP = (function () {
   function roleName() {
     return ROLE_NAMES[state.role] || state.role;
   }
+  var ROLE_CODE = {
+    "管理员": "admin", "教师": "teacher", "标注员": "annotator",
+    "学生": "student", "仲裁员": "adjudicator", "领域专家": "expert"
+  };
+  function roleCode(cn) {
+    return ROLE_CODE[cn] || "admin";
+  }
+  function currentUser() {
+    var users = (window.MOCK && window.MOCK.users) || [];
+    for (var i = 0; i < users.length; i++) {
+      if (users[i].id === state.currentUserId) {
+        return { id: users[i].id, name: users[i].name, role: roleCode(users[i].role), roles: users[i].roles || [] };
+      }
+    }
+    return { id: state.currentUserId, name: roleName(), role: state.role, roles: [] };
+  }
+  function userName() {
+    return currentUser().name || roleName();
+  }
 
   function fmtDate(d) {
     var t = new Date();
@@ -219,6 +246,8 @@ window.APP = (function () {
     esc: esc,
     role: role,
     roleName: roleName,
+    currentUser: currentUser,
+    userName: userName,
     fmtDate: fmtDate,
     data: window.MOCK,
     ui: {

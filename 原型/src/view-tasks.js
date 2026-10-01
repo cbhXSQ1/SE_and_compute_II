@@ -115,6 +115,8 @@
     title: "任务列表",
     render: function (root) {
       var role = APP.role();
+      var user = APP.currentUser();
+      var tasks = APP.annotateLogic.visibleTasks(APP.data.tasks, user);
       var quick = "";
       if (role === "annotator") quick = '<button type="button" class="btn primary" data-quick="next">下一条任务</button>';
       if (role === "admin") quick = '<button type="button" class="btn primary" data-quick="create">新建标注任务</button>';
@@ -123,11 +125,13 @@
 
       root.innerHTML =
         '<div class="page">' +
-        '<div class="page-head"><div><h2>任务列表</h2><div class="sub">当前角色：' + APP.roleName() + "。" + ROLE_HINTS[role] + "</div></div><span class='spacer'></span>" + quick + "</div>" +
+        '<div class="page-head"><div><h2>任务列表</h2><div class="sub">当前用户：' + APP.esc(user.name) + "（" + APP.roleName() + "）。" + ROLE_HINTS[role] + "</div></div><span class='spacer'></span>" + quick + "</div>" +
         (role === "admin" ? adminSummary() : "") +
-        '<div class="grid cols-3">' + APP.data.tasks.map(function (t) { return card(t, role); }).join("") + "</div>" +
-        consistencyCard() +
-        '<div class="notice info mt16">演示提示：可自由切换角色查看不同视角；“双人独立标注”与“仲裁员随时介入”为《指南》要求的工作机制。</div>' +
+        (tasks.length
+          ? '<div class="grid cols-3">' + tasks.map(function (t) { return card(t, role); }).join("") + "</div>"
+          : '<div class="empty">当前用户 ' + APP.esc(user.name) + " 名下暂无可见任务。</div>") +
+        ((role === "admin" || role === "adjudicator" || role === "expert") ? consistencyCard() : "") +
+        '<div class="notice info mt16">演示提示：任务列表已按「当前用户」隔离——标注员仅见分配给自己的文书，仲裁员仅见指定给自己的任务，学生/教师仅见教学练习；可切换右上角用户查看不同视角。</div>' +
         "</div>";
 
       root.addEventListener("click", function (e) {
@@ -135,7 +139,12 @@
         if (quickBtn) {
           var q = quickBtn.getAttribute("data-quick");
           if (q === "create") APP.goto("create");
-          if (q === "next") { APP.state.currentTaskId = "T1"; APP.goto("annotate", { mode: "cut" }); }
+          if (q === "next") {
+            var t0 = tasks[0];
+            if (!t0) { APP.ui.toast("名下暂无待标注任务", "warn"); return; }
+            APP.state.currentTaskId = t0.id;
+            APP.goto("annotate", { mode: "cut", taskId: t0.id });
+          }
           if (q === "adjudicate") APP.goto("adjudicate");
           if (q === "teaching") APP.goto("teaching");
           return;

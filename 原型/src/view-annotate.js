@@ -82,7 +82,17 @@
     ".diagram.va-disabled{opacity:1;cursor:default}" +
     ".diagram.va-disabled .rel-node{cursor:not-allowed}" +
     ".va-rel-table td{padding:6px 8px;font-size:12px}" +
-    ".va-body .notice{font-size:12px}"
+    ".va-body .notice{font-size:12px}" +
+    ".va-3col{display:flex;align-items:stretch;gap:0;min-width:0}" +
+    ".va-col{min-width:0;flex:1 1 0px;overflow:hidden}" +
+    ".va-col-left{flex-grow:1.15}" +
+    ".va-col-mid{flex-grow:1.0}" +
+    ".va-col-right{flex-grow:1.35}" +
+    ".va-resizer{width:8px;flex:0 0 8px;cursor:col-resize;background:var(--primary-weak);border-left:1px solid var(--line);border-right:1px solid var(--line)}" +
+    ".va-resizer:hover{background:#c9daf8}" +
+    ".table-wrap{overflow-x:auto;max-width:100%}" +
+    ".va-rel-table th,.va-rel-table td{white-space:nowrap}" +
+    "@media (max-width:1100px){.va-3col{flex-direction:column}.va-resizer{display:none}}"
   );
 
   function ensure() {
@@ -153,18 +163,64 @@
   }
 
   function paint() {
-    var body = bodyEl();
-    var ps = [];
-    var ls = [];
-    Array.prototype.forEach.call(body.querySelectorAll(".paper"), function (p) { ps.push(p.scrollTop); });
-    Array.prototype.forEach.call(body.querySelectorAll(".list"), function (p) { ls.push(p.scrollTop); });
-    body.innerHTML = RENDER[S.tab]();
-    Array.prototype.forEach.call(body.querySelectorAll(".paper"), function (p, i) {
-      if (ps[i] != null) p.scrollTop = ps[i];
+    var root = hostRoot;
+    if (!root) return;
+    var left = root.querySelector(".va-col-left");
+    var mid = root.querySelector(".va-col-mid");
+    var right = root.querySelector(".va-col-right");
+    var leftPaper = left && left.querySelector(".paper");
+    var leftScroll = leftPaper ? leftPaper.scrollTop : 0;
+    if (left) left.innerHTML = leftColHtml();
+    var lp = left && left.querySelector(".paper");
+    if (lp) lp.scrollTop = leftScroll;
+    if (mid) mid.innerHTML = midColHtml();
+    if (right) right.innerHTML = rightColHtml();
+  }
+
+  // 三栏比例（需求 2.4：比例可调）。COL_FLEX 为三列 flex-grow 权重，拖动分隔条调整。
+  var COL_FLEX = { left: 1.15, mid: 1.0, right: 1.35 };
+  function applyColFlex(root) {
+    Object.keys(COL_FLEX).forEach(function (k) {
+      var col = root.querySelector(".va-col-" + k);
+      if (col) col.style.flexGrow = COL_FLEX[k];
     });
-    Array.prototype.forEach.call(body.querySelectorAll(".list"), function (p, i) {
-      if (ls[i] != null) p.scrollTop = ls[i];
+  }
+  function bindResizers(root) {
+    Array.prototype.forEach.call(root.querySelectorAll(".va-resizer"), function (rs) {
+      rs.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        var keys = rs.getAttribute("data-resizer") === "0" ? ["left", "mid"] : ["mid", "right"];
+        var colA = root.querySelector(".va-col-" + keys[0]);
+        var colB = root.querySelector(".va-col-" + keys[1]);
+        var startX = e.clientX;
+        var startA = COL_FLEX[keys[0]];
+        var total = startA + COL_FLEX[keys[1]];
+        rs.classList.add("dragging");
+        function move(ev) {
+          var a = Math.max(0.4, Math.min(3.5, startA + (ev.clientX - startX) / 120));
+          var b = Math.max(0.4, Math.min(3.5, total - a));
+          COL_FLEX[keys[0]] = a;
+          COL_FLEX[keys[1]] = b;
+          if (colA) colA.style.flexGrow = a;
+          if (colB) colB.style.flexGrow = b;
+        }
+        function up() {
+          rs.classList.remove("dragging");
+          document.removeEventListener("mousemove", move);
+          document.removeEventListener("mouseup", up);
+        }
+        document.addEventListener("mousemove", move);
+        document.addEventListener("mouseup", up);
+      });
     });
+    applyColFlex(root);
+  }
+
+  function midColHtml() {
+    if (S.tab === "cut") return midCutHtml();
+    if (S.tab === "elements") return midElementsHtml();
+    if (S.tab === "relations") return midRelationsHtml();
+    return midDiagramHtml();
   }
 
   function readOnlyNotice(role) {
@@ -197,6 +253,12 @@
     var tid = selectedTaskId();
     for (var i = 0; i < tasks.length; i++) { if (tasks[i].id === tid) return tasks[i]; }
     return null;
+  }
+
+  function currentReasonText() {
+    var doc = selectedDoc();
+    var docData = (M && M.docData && M.docData[doc.id]) || {};
+    return docData.reasonText || (M && M.doc && M.doc.reasonText) || "";
   }
 
   function reloadAnnotation() {
@@ -237,10 +299,12 @@
     var taskId = selectedTaskId();
     var doc = selectedDoc();
     var tasks = (APP.data && APP.data.tasks) || [];
+    var user = APP.currentUser();
+    var visible = APP.annotateLogic.visibleTasks(tasks, user);
     var docs = documentsFor(taskId);
     if (!docs.length) docs = [doc];
     var taskSel = '<select data-task-switch style="width:auto;max-width:280px">' +
-      tasks.filter(function (t) { return !t.teaching || practice; }).map(function (t) {
+      visible.filter(function (t) { return !t.teaching || practice; }).map(function (t) {
         return '<option value="' + APP.esc(t.id) + '"' + (t.id === taskId ? " selected" : "") + ">" +
           APP.esc(t.id + " · " + t.name) + "</option>";
       }).join("") + "</select>";
@@ -255,6 +319,9 @@
     var curTask = currentTask();
     if (curTask && (curTask.status === "待裁定" || curTask.status === "已完成")) {
       notices += '<div class="notice small mb12">该任务当前状态为「' + APP.esc(curTask.status) + '」，标注已锁定、不可修改；如需重标请新建任务。</div>';
+    }
+    if (curTask && APP.role() === "annotator" && (curTask.annotators || []).indexOf(APP.userName()) < 0) {
+      notices += '<div class="notice warn small mb12">该任务未分配给你（分配：' + APP.esc((curTask.annotators || []).join("、")) + "），当前仅可只读查看；请切换「任务」到分配给你的文书。</div>";
     }
     var back = APP.role() === "admin" && S.adminDetail
       ? '<button type="button" class="btn small" data-act="admin-back">返回总览</button>' : "";
@@ -369,23 +436,60 @@
       "</div></div>";
   }
 
-  function renderCut() {
+  // ===== 三栏同屏布局（需求 2.4：左原文+要素列表 / 中标注操作 / 右论证图示）=====
+  function leftPaperHtml() {
+    if (S.tab === "cut" || APP.store.get("segments").length === 0) {
+      var pIdx = 0;
+      return '<div class="paper' + (canEdit ? "" : " va-disabled") + '">' + APP.store.get("pieces").map(function (p) {
+        if (p.boxed) pIdx++;
+        return '<span class="seg' + (p.boxed ? " boxed" : "") + '" data-piece="' + p.id + '">' +
+          (p.boxed ? '<sup class="no">P' + pIdx + "</sup>" : "") + APP.esc(p.text) + "</span>";
+      }).join("") + "</div>";
+    }
+    return '<div class="paper">' + APP.store.get("segments").map(function (s) {
+      var cls = "seg" + (s.type ? " boxed alt" : "") + (s.id === S.picked ? " picked" : "");
+      var tip = s.type ? ' title="' + APP.esc(s.id + "：" + tagName(s.type)) + '"' : "";
+      return '<span class="' + cls + '"' + (S.tab === "elements" ? ' data-seg="' + s.id + '"' : "") + tip + ">" +
+        '<sup class="no">' + s.id + "</sup>" + APP.esc(s.text) + "</span>";
+    }).join("") + "</div>";
+  }
+
+  function leftListHtml() {
+    var annotated = APP.store.get("segments").filter(function (s) { return !!s.type; }).length;
+    if (!APP.store.get("segments").length) {
+      return '<div class="small muted mb8">要素列表</div>' +
+        '<div class="empty small">切割提交后自动生成要素列表</div>';
+    }
+    var relMode = S.tab === "relations";
+    return '<div class="small muted mb8">要素列表（共 ' + APP.store.get("segments").length + " · 已标注 " + annotated + "，点击" + (relMode ? "加入关系" : "选择") + "）</div>" +
+      '<div class="list">' + APP.store.get("segments").map(function (s) {
+        var disabled = relMode && !s.type;
+        var active = relMode ? S.relPicked.indexOf(s.id) >= 0 : s.id === S.picked;
+        var tip = s.id + "：" + (s.type ? tagName(s.type) : "未标注");
+        return '<div class="list-item' + (active ? " active" : "") + (disabled ? " va-disabled" : "") +
+          '" ' + (relMode ? 'data-rel-pick="' + s.id + '"' : 'data-seg="' + s.id + '"') + ' title="' + APP.esc(tip) + '">' +
+          '<span class="idx">' + s.id + '</span><span class="txt">' + APP.esc(s.text) + "</span>" +
+          (s.type ? '<span class="tag green">' + APP.esc(s.type) + "</span>" : '<span class="tag amber">未标注</span>') +
+          "</div>";
+      }).join("") + "</div>";
+  }
+
+  function leftColHtml() {
+    return '<div class="small muted mb8">原文</div>' + leftPaperHtml() +
+      '<div class="mt12">' + leftListHtml() + "</div>";
+  }
+
+  function midCutHtml() {
     var boxed = APP.store.get("pieces").filter(function (p) { return p.boxed; }).length;
-    var pIdx = 0;
-    return '<div class="toolbar">' +
-      '<span class="small muted">已加框要素数：<b class="va-box-count">' + boxed + "</b> / " + APP.store.get("pieces").length + "</span>" +
+    return '<div class="small muted mb8">标注操作 · 文本切割</div>' +
+      '<div class="small">已加框要素数：<b class="va-box-count">' + boxed + "</b> / " + APP.store.get("pieces").length + "</div>" +
+      '<div class="tag-options mt8">' +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="re-extract">重新提取</button>' +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="suggest-cut">按规则预切割</button>' +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="drag-range">手动拖动调整</button>' +
       "</div>" +
-      '<div class="paper' + (canEdit ? "" : " va-disabled") + '">' + APP.store.get("pieces").map(function (p) {
-        if (p.boxed) pIdx++;
-        return '<span class="seg' + (p.boxed ? " boxed" : "") + '" data-piece="' + p.id + '">' +
-          (p.boxed ? '<sup class="no">P' + pIdx + "</sup>" : "") +
-          APP.esc(p.text) + "</span>";
-      }).join("") + "</div>" +
-      '<div class="row mt12"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-cut">提交切割</button>' +
-      '<span class="small muted">点击加框/去框，按原文顺序自动编号 P1, P2, P3…</span></div>';
+      '<div class="notice info small mt8">在左侧原文点击片段即可加框/去框，按原文顺序自动编号 P1, P2, P3…</div>' +
+      '<div class="row mt12"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-cut">提交切割</button></div>';
   }
   function tagButton(t, pickedType, locked) {
     var val = tagValue(t);
@@ -394,81 +498,25 @@
       '<span class="code">' + APP.esc(t.code || "·") + "</span>" + APP.esc(t.name) + "</button>";
   }
 
-  function renderElements() {
-    var annotated = APP.store.get("segments").filter(function (s) { return !!s.type; });
-    var untyped = APP.store.get("segments").filter(function (s) { return !s.type; });
+  function midElementsHtml() {
     var picked = segById(S.picked);
     var pickedType = picked ? picked.type : "";
     var tagsLocked = !canEdit && !!picked;
-
-    var left = APP.store.get("segments").map(function (s) {
-      var cls = "seg" + (s.type ? " boxed alt" : "") + (s.id === S.picked ? " picked" : "");
-      var tip = s.type ? ' title="' + APP.esc(s.id + "：" + tagName(s.type)) + '"' : "";
-      return '<span class="' + cls + '" data-seg="' + s.id + '"' + tip + ">" +
-        '<sup class="no">' + s.id + "</sup>" + APP.esc(s.text) + "</span>";
-    }).join("");
-
-    var mid = '<div class="tag-panel">' +
-      '<div class="tag-group"><h4>非命题要素</h4><div class="tag-options">' +
-      NON_PROPS.map(function (t) { return tagButton(t, pickedType, tagsLocked); }).join("") + "</div></div>" +
-      '<div class="tag-group"><h4>命题要素</h4><div class="tag-options">' +
-      PROPS.map(function (t) { return tagButton(t, pickedType, tagsLocked); }).join("") + "</div></div>" +
+    var untyped = APP.store.get("segments").filter(function (s) { return !s.type; });
+    return '<div class="small muted mb8">标注操作 · 要素标注</div>' +
+      '<div class="tag-panel">' +
+      '<div class="tag-group"><h4>非命题要素</h4><div class="tag-options">' + NON_PROPS.map(function (t) { return tagButton(t, pickedType, tagsLocked); }).join("") + "</div></div>" +
+      '<div class="tag-group"><h4>命题要素</h4><div class="tag-options">' + PROPS.map(function (t) { return tagButton(t, pickedType, tagsLocked); }).join("") + "</div></div>" +
       '<div class="notice info small va-def-line">' + APP.esc(DEF_HINT) + "</div>" +
       '<div class="row">' +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="pre-number">先编号后补标签</button>' +
       '<button type="button" class="btn small danger' + (canEdit ? "" : " va-disabled") + '" data-act="delete-elem">删除所选要素</button>' +
-      "</div></div>";
-
-    var stat = "共 " + APP.store.get("segments").length + " 个要素，已标注 " + annotated.length + " 个" +
-      (untyped.length ? "（" + untyped.map(function (s) { return s.id; }).join("、") + " 未标注）" : "（全部已标注）");
-
-    var right = "<div>" +
-      '<div class="small muted mb8">' + stat + "</div>" +
-      (untyped.length ? '<div class="notice small mb8">仍有 ' + untyped.length + " 个要素未标注：" +
-        untyped.map(function (s) { return s.id; }).join("、") + "，请补充类型后再提交。</div>" : "") +
-      '<div class="list">' + APP.store.get("segments").map(function (s) {
-        var tip = s.id + "：" + (s.type ? tagName(s.type) : "未标注");
-        return '<div class="list-item' + (s.id === S.picked ? " active" : "") + '" data-seg="' + s.id + '" title="' + APP.esc(tip) + '">' +
-          '<span class="idx">' + s.id + '</span><span class="txt">' + APP.esc(s.text) + "</span>" +
-          (s.type ? '<span class="tag green">' + APP.esc(s.type) + "</span>" : '<span class="tag amber">未标注</span>') +
-          "</div>";
-      }).join("") + "</div>" +
-      '<div class="row mt12"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-elements">提交要素标注</button></div></div>';
-
-    return '<div class="workbench">' +
-      '<div><div class="small muted mb8">原文（点击选择要素）</div><div class="paper">' + left + "</div></div>" +
-      mid + right + "</div>";
+      "</div></div>" +
+      (untyped.length ? '<div class="notice small mt8">仍有 ' + untyped.length + " 个要素未标注：" + untyped.map(function (s) { return s.id; }).join("、") + "，请补充类型后再提交。</div>" : "") +
+      '<div class="row mt12"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-elements">提交要素标注</button></div>';
   }
 
-  function renderRelations() {
-    var left = '<div><div class="small muted mb8">选择两个或多个已标注要素（按点击顺序参与形式化表达）</div>' +
-      '<div class="list">' + APP.store.get("segments").map(function (s) {
-        var active = S.relPicked.indexOf(s.id) >= 0;
-        var disabled = !s.type;
-        return '<div class="list-item' + (active ? " active" : "") + (disabled ? " va-disabled" : "") +
-          '" data-rel-pick="' + s.id + '" title="' + APP.esc(disabled ? "未标注要素不可参与关系" : s.text) + '">' +
-          '<span class="idx">' + s.id + '</span><span class="txt">' + APP.esc(s.text) + "</span>" +
-          (s.type ? '<span class="tag green">' + APP.esc(s.type) + "</span>" : '<span class="tag amber">未标注</span>') +
-          "</div>";
-      }).join("") + "</div></div>";
-
-    var relBtns = REL_TYPES.map(function (r) {
-      return '<button type="button" class="' + (S.relType === r.code ? "active" : "") + '" data-rel-type="' + r.code + '">' +
-        '<span class="code">' + r.code + "</span>" + r.name + "</button>";
-    }).join("");
-    var cur = relTypeByCode(S.relType);
-    var rule = cur ? cur.rule : "请选择关系类型；已选要素将按点击顺序写入形式化表达。";
-
-    var mid = '<div class="tag-panel">' +
-      '<div class="tag-group"><h4>关系类型（单选）</h4><div class="tag-options">' + relBtns + "</div></div>" +
-      '<div class="small muted">' + APP.esc(rule) + "</div>" +
-      '<div class="small">已选要素：' + (S.relPicked.length
-        ? S.relPicked.map(function (id) { return '<span class="code-chip">' + APP.esc(id) + "</span>"; }).join(" ")
-        : '<span class="muted">未选择</span>') + "</div>" +
-      '<div class="row"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="make-rel">生成关系</button></div>' +
-      nestedDemoHtml() +
-      "</div>";
-
+  function relTableHtml(actions) {
     var rows = APP.store.get("relations").map(function (r) {
       var rt = relTypeByCode(r.type) || { name: r.type, cls: "gray" };
       return "<tr>" +
@@ -476,19 +524,36 @@
         '<td><span class="tag ' + rt.cls + '">' + APP.esc(r.type) + " " + APP.esc(rt.name) + "</span></td>" +
         "<td>" + r.members.map(function (m) { return '<span class="code-chip">' + APP.esc(m) + "</span>"; }).join(" ") + "</td>" +
         '<td><span class="code-chip">' + APP.esc(r.formal) + "</span></td>" +
-        '<td><button type="button" class="btn small danger' + (canEdit ? "" : " va-disabled") + '" data-del-rel="' + APP.esc(r.id) + '">删除</button></td>' +
+        (actions ? '<td><button type="button" class="btn small danger' + (canEdit ? "" : " va-disabled") + '" data-del-rel="' + APP.esc(r.id) + '">删除</button></td>' : "") +
         "</tr>";
     }).join("");
+    var cols = actions ? 5 : 4;
+    return '<div class="table-wrap"><table class="table va-rel-table"><thead><tr><th>编号</th><th>类型</th><th>成员</th><th>形式化表达</th>' +
+      (actions ? "<th></th>" : "") + "</tr></thead>" +
+      "<tbody>" + (rows || '<tr><td colspan="' + cols + '" class="muted">暂无关系</td></tr>') + "</tbody></table></div>";
+  }
 
-    var right = "<div>" +
-      '<table class="table va-rel-table"><thead><tr><th>编号</th><th>类型</th><th>成员</th><th>形式化表达</th><th></th></tr></thead>' +
-      "<tbody>" + (rows || '<tr><td colspan="5" class="muted">暂无关系</td></tr>') + "</tbody></table>" +
+  function midRelationsHtml() {
+    var relBtns = REL_TYPES.map(function (r) {
+      return '<button type="button" class="' + (S.relType === r.code ? "active" : "") + '" data-rel-type="' + r.code + '">' +
+        '<span class="code">' + r.code + "</span>" + r.name + "</button>";
+    }).join("");
+    var cur = relTypeByCode(S.relType);
+    var rule = cur ? cur.rule : "请选择关系类型；已选要素将按点击顺序写入形式化表达。";
+    return '<div class="small muted mb8">标注操作 · 关系标注</div>' +
+      '<div class="small muted">先在左侧要素列表点击选择要素（按点击顺序），再选关系类型生成：</div>' +
+      '<div class="tag-group mt8"><h4>关系类型（单选）</h4><div class="tag-options">' + relBtns + "</div></div>" +
+      '<div class="small muted">' + APP.esc(rule) + "</div>" +
+      '<div class="small mt8">已选要素：' + (S.relPicked.length
+        ? S.relPicked.map(function (id) { return '<span class="code-chip">' + APP.esc(id) + "</span>"; }).join(" ")
+        : '<span class="muted">未选择</span>') + "</div>" +
+      '<div class="row"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="make-rel">生成关系</button></div>' +
+      nestedDemoHtml() +
+      '<div class="small muted mt12">关系表（含嵌套关系）</div>' +
+      relTableHtml(true) +
       '<div class="notice info mt12">独立支持与组合支持不可混同：分别独立支持写作多条 S(pi, pj)；合取支持写作 S(J(...), pj)。</div>' +
       '<div class="row mt12"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-relations">提交关系标注</button>' +
-      '<span class="small muted">提交后留痕为历史版本，可在右上角「历史版本」查看</span></div>' +
-      "</div>";
-
-    return '<div class="workbench">' + left + mid + right + "</div>";
+      '<span class="small muted">提交后留痕为历史版本</span></div>';
   }
   function svgHeight(dg) {
     var maxY = 0;
@@ -603,7 +668,14 @@
     return false;
   }
 
-  function renderDiagram() {
+  function midDiagramHtml() {
+    return '<div class="small muted mb8">标注操作 · 论证图示</div>' +
+      '<div class="small muted">论证图示在右侧展示；此处列出关系表供对照，可切回「关系标注」修改。</div>' +
+      '<div class="mt8">' + relTableHtml(false) + "</div>" +
+      '<div class="notice info mt12">命题节点以带框序号表示；命题类型不进入图示（依《指南》6.1）。</div>';
+  }
+
+  function rightColHtml() {
     var dg = curDiagram();
     var subTabs = APP.store.get("diagrams").map(function (t, i) {
       return '<button type="button" data-dg="' + i + '"' + (i === S.dg ? ' class="active"' : "") + ">" + APP.esc(t.title) + "</button>";
@@ -614,20 +686,21 @@
       '<span><i class="plus">+</i>组合/匹配</span>' +
       '<span><i class="slash">/</i>同一</span>' +
       "</div>";
-    return '<div class="tabs">' + subTabs + "</div>" +
+    return '<div class="small muted mb8">论证图示</div>' +
+      (subTabs ? '<div class="tabs">' + subTabs + "</div>" : "") +
       '<div class="row mb8">' + legend + '<span class="spacer"></span>' +
-      '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="rebuild-diagram">按关系表重建图示（演示）</button>' +
-      '<button type="button" class="btn small" data-act="zoom-out">缩小</button>' +
+      '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="rebuild-diagram">重建</button>' +
+      '<button type="button" class="btn small" data-act="zoom-out">−</button>' +
       '<span class="va-zoom-label" data-slot="zoom-label">' + Math.round(S.zoom * 100) + "%</span>" +
-      '<button type="button" class="btn small" data-act="zoom-in">放大</button>' +
+      '<button type="button" class="btn small" data-act="zoom-in">+</button>' +
       '<button type="button" class="btn small" data-act="zoom-reset">重置</button>' +
-      '<button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-diagram">提交仲裁员审查</button></div>' +
+      '<button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-diagram">提交审查</button></div>' +
       (dg ? '<div class="diagram' + (canEdit ? "" : " va-disabled") + '" id="va-diagram">' +
         '<div class="va-viewport">' +
         '<div class="va-pan" data-slot="pan" style="transform:translate(' + S.panX + 'px,' + S.panY + 'px) scale(' + S.zoom + ')">' +
         '<div class="va-svg-host">' + svgFor(dg) + "</div></div></div></div>"
-        : '<div class="empty">暂无图示数据</div>') +
-      '<div class="notice info mt12">命题节点以带框序号表示；命题类型仅存在于标注表/数据库，不进入图示（依《指南》6.1）。滚轮缩放、拖拽空白处平移、拖拽节点调整位置。</div>';
+        : '<div class="empty">暂无图示数据，提交关系标注后可「重建」</div>') +
+      '<div class="notice info mt12">滚轮缩放、拖拽空白平移、拖拽节点调整位置。</div>';
   }
 
   function nextRelId() {
@@ -1071,17 +1144,34 @@
       return "";
     });
     var range = pNos.length === 1 ? pNos[0] : pNos[0] + "–" + pNos[pNos.length - 1];
-    var diff = Math.min(100, Math.round(Math.abs(count - APP.store.get("pieces").length) / APP.store.get("pieces").length * 100));
-    var passed = diff <= 10;
+
+    // 双人独立切割差异度（需求 2.1.5）：与同任务另一位标注员的切割比对
+    var task = currentTask();
+    var me = APP.userName();
+    var annotators = (task && task.annotators) || [];
+    var peer = annotators.filter(function (n) { return n !== me; })[0];
+    var peerCut = (M.cuts && M.cuts[selectedTaskId()] && M.cuts[selectedTaskId()][selectedDoc().id] && M.cuts[selectedTaskId()][selectedDoc().id][peer]) || null;
+    var myTexts = boxed.map(function (p) { return p.text; });
+    var diffHtml;
+    var passed = true;
+    if (peer && peerCut) {
+      var diff = APP.annotateLogic.computeCutDiff(myTexts, peerCut, currentReasonText());
+      passed = diff <= 10;
+      diffHtml = '<p>与 <b>' + APP.esc(peer) + '</b> 的切割差异度：<b>' + diff + '%</b>（阈值 10%）—— ' +
+        (passed ? "<span class='ok-text'>通过 ✓</span>" : "<span class='err-text'>超过阈值</span>") + "</p>" +
+        '<p class="small muted">差异度 = 1 − 2×共同边界数 /（双方边界数之和）× 100%：双方在原文中划定的要素起止边界重合度越高，差异度越低。</p>' +
+        '<p class="small muted">' + (passed
+          ? "差异度在 10% 以内，可进入要素标注阶段。"
+          : "差异度超过 10%，请返回调整切割后再提交（正式流程中由仲裁员裁定）。") + "</p>";
+    } else {
+      diffHtml = '<p class="small muted">' + (peer
+        ? "对方标注员 <b>" + APP.esc(peer) + "</b> 尚未提交切割，暂无法自动比对；可先提交，待双方均提交后由仲裁员统一比较差异度（阈值 10%）。"
+        : "当前任务无双人切割数据（演示），差异度待仲裁员比较（阈值 10%）。") + "</p>";
+    }
 
     APP.ui.modal({
       title: "提交切割",
-      body: "<p>当前切割：<b>" + count + " 个</b>要素片段（" + APP.esc(range) + "）</p>" +
-        '<p>模拟比对差异度：<b>' + diff + '%</b>（阈值 10%）—— ' +
-        (passed ? "<span class='ok-text'>通过 ✓</span>" : "<span class='err-text'>超过阈值</span>") + "</p>" +
-        '<p class="small muted">' + (passed
-          ? "差异度在 10% 以内，可以进入要素标注阶段。"
-          : "差异度超过 10%，建议返回调整切割后再提交。") + "</p>" +
+      body: "<p>当前切割：<b>" + count + " 个</b>要素片段（" + APP.esc(range) + "）</p>" + diffHtml +
         '<p class="small muted">提交后将根据加框结果自动生成要素序号（P1, P2, P3…），进入要素标注阶段。</p>',
       actions: [
         { label: "返回调整", kind: "" },
@@ -1266,7 +1356,6 @@
   }
 
   function onWheel(e) {
-    if (S.tab !== "diagram") return;
     if (!e.target.closest || !e.target.closest("#va-diagram")) return;
     var vp = hostRoot.querySelector("#va-diagram .va-viewport");
     if (!vp) return;
@@ -1284,7 +1373,7 @@
   }
 
   function onMouseDown(e) {
-    if (e.button !== 0 || S.tab !== "diagram") return;
+    if (e.button !== 0) return;
     var handle = e.target.closest ? e.target.closest(".va-handle") : null;
     var g = handle ? handle.parentNode : (e.target.closest ? e.target.closest(".node, .rel-node") : null);
     if (g && g.getAttribute) {
@@ -1408,13 +1497,6 @@
     if (t) { S.dg = Number(t.getAttribute("data-dg")) || 0; paint(); return; }
   }
 
-  var RENDER = {
-    cut: renderCut,
-    elements: renderElements,
-    relations: renderRelations,
-    diagram: renderDiagram
-  };
-
   function bindOnce(root) {
     if (root.__vaBound) return;
     root.__vaBound = true;
@@ -1435,7 +1517,8 @@
     hostRoot = root;
     var task = currentTask();
     var locked = !!task && task.status !== "标注中" && task.status !== "待标注";
-    canEdit = (APP.role() === "annotator" && !locked) || (APP.role() === "student" && APP.state.practice);
+    var assigned = !task || (task.annotators || []).indexOf(APP.userName()) >= 0;
+    canEdit = (APP.role() === "annotator" && !locked && assigned) || (APP.role() === "student" && APP.state.practice);
     if (APP.role() === "admin" && !S.adminDetail) {
       renderAdminOverview(root);
       bindOnce(root);
@@ -1451,8 +1534,15 @@
       '<div class="tabs">' + TABS.map(function (t) {
         return '<button type="button" data-tab="' + t.id + '"' + (S.tab === t.id ? ' class="active"' : "") + ">" + t.label + "</button>";
       }).join("") + "</div>" +
-      '<div class="va-body"></div>' +
+      '<div class="va-3col">' +
+      '<div class="va-col va-col-left" data-col="left"></div>' +
+      '<div class="va-resizer" data-resizer="0" title="拖动调整左/中栏比例"></div>' +
+      '<div class="va-col va-col-mid" data-col="mid"></div>' +
+      '<div class="va-resizer" data-resizer="1" title="拖动调整中/右栏比例"></div>' +
+      '<div class="va-col va-col-right" data-col="right"></div>' +
+      "</div>" +
       "</div>";
+    bindResizers(root);
     paint();
     bindOnce(root);
   }
