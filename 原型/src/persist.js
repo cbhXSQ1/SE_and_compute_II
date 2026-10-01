@@ -2,16 +2,16 @@
   var PREFIX = "annotation-draft-";
   var timer = null;
 
-  function key(taskId) { return PREFIX + (taskId || "T1"); }
+  function key(taskId, docId) { return PREFIX + (taskId || "T1") + (docId ? ":" + docId : ""); }
 
-  function load(taskId) {
+  function load(taskId, docId) {
     try {
-      var raw = localStorage.getItem(key(taskId));
+      var raw = localStorage.getItem(key(taskId, docId));
       return raw ? JSON.parse(raw) : null;
     } catch (e) { return null; }
   }
 
-  function save(taskId) {
+  function save(taskId, docId) {
     var data = {
       pieces: APP.store.get("pieces"),
       segments: APP.store.get("segments"),
@@ -20,18 +20,18 @@
       savedAt: Date.now()
     };
     try {
-      localStorage.setItem(key(taskId), JSON.stringify(data));
+      localStorage.setItem(key(taskId, docId), JSON.stringify(data));
       markSaved(data.savedAt);
     } catch (e) {}
   }
 
   function saveDebounced() {
     clearTimeout(timer);
-    timer = setTimeout(function () { save(APP.state.currentTaskId); }, 300);
+    timer = setTimeout(function () { save(APP.state.currentTaskId, APP.state.currentDocId); }, 300);
   }
 
-  function clear(taskId) {
-    try { localStorage.removeItem(key(taskId)); } catch (e) {}
+  function clear(taskId, docId) {
+    try { localStorage.removeItem(key(taskId, docId)); } catch (e) {}
   }
 
   function markSaved(ts) {

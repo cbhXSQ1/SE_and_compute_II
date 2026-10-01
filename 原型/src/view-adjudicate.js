@@ -148,7 +148,7 @@
       '<div data-slot="docs">' + docsHTML() + "</div>" +
       '<h4 class="mt16">专家裁决记录</h4>' +
       '<div class="mb12" data-slot="expert">' + expertHTML() + "</div>" +
-      '<button type="button" class="btn primary" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>" +
+      (APP.role() === "annotator" ? "" : '<button type="button" class="btn primary" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>") +
       "</div>";
   }
 
@@ -196,10 +196,12 @@
   }
 
   function layoutHTML() {
+    var compareView = APP.role() === "annotator";
     var roTag = (canAdj || canExpert) ? "" : '<span class="tag gray">只读模式</span>';
     var roNote = canAdj ? "" : '<div class="notice mt12">' + APP.esc(RO_NOTES[APP.role()] || "当前角色为只读查看。") + "</div>";
     return '<div class="page">' +
-      '<div class="page-head"><div><h2>裁定工作台</h2><div class="sub">双人独立标注结果比对：自动/半自动比对，人工裁定（依《指南》8.2.4）</div></div>' +
+      '<div class="page-head"><div><h2>' + (compareView ? "比对结果" : "裁定工作台") + '</h2><div class="sub">' +
+      (compareView ? "查看最终裁定结果，并与自己的标注结果进行比对（只读）" : "双人独立标注结果比对：自动/半自动比对，人工裁定（依《指南》8.2.4）") + "</div></div>" +
       '<span class="spacer"></span>' +
       '<span class="tag gray">指南 ' + APP.esc((APP.data.guide && APP.data.guide.version) || "v1.2") + "</span>" +
       '<span class="tag gray">文书 ' + APP.esc((APP.data.doc && APP.data.doc.id) || "D1") + "</span>" +
@@ -213,8 +215,9 @@
       '<span class="spacer"></span>' +
       '<span class="small muted" data-slot="count">' + countText() + "</span>" +
       '<button type="button" class="btn' + (store.single ? " toggled" : "") + '" data-act="single">单版本模式</button>' +
-      '<button type="button" class="btn" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>" +
-      '<button type="button" class="btn primary" data-act="finish"' + roOff() + ">完成裁定</button>" +
+      (compareView ? "" :
+        '<button type="button" class="btn" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>" +
+        '<button type="button" class="btn primary" data-act="finish"' + roOff() + ">完成裁定</button>") +
       "</div>" +
       '<div class="adj-layout">' +
       paperHTML() +

@@ -88,7 +88,7 @@
   function ensure() {
     if (S.ready) return;
     S.ready = true;
-    APP.api.loadAnnotation(APP.state.currentTaskId).then(function (d) {
+    APP.api.loadAnnotation(APP.state.currentTaskId, APP.state.currentDocId).then(function (d) {
       APP.store.patch({
         pieces: (d.pieces || []).map(function (p) {
           return { id: p.id, text: p.text, boxed: !!p.boxed };
@@ -174,11 +174,73 @@
     return "当前角色为只读查看，标注修改请由标注员执行。";
   }
 
+  function documentsFor(taskId) {
+    var docs = ((M && M.documents) || []).filter(function (d) { return d.taskId === taskId; });
+    if (!docs.length && M && M.doc) docs = [M.doc];
+    return docs;
+  }
+
+  function selectedTaskId() {
+    return APP.state.currentTaskId || (M && M.doc && M.doc.taskId) || "T1";
+  }
+
+  function selectedDoc() {
+    var docs = documentsFor(selectedTaskId());
+    var id = APP.state.currentDocId;
+    for (var i = 0; i < docs.length; i++) { if (docs[i].id === id) return docs[i]; }
+    return docs[0] || (M && M.doc) || {};
+  }
+
+  function reloadAnnotation() {
+    S.ready = false;
+    S.rendered = false;
+    S.dg = 0;
+    S.picked = "";
+    S.relPicked = [];
+    S.relType = "";
+    S.tab = "cut";
+    ensure();
+  }
+
+  function switchTask(taskId) {
+    if (!taskId || taskId === APP.state.currentTaskId) return;
+    APP.state.currentTaskId = taskId;
+    var docs = documentsFor(taskId);
+    APP.state.currentDocId = docs.length ? docs[0].id : APP.state.currentDocId;
+    reloadAnnotation();
+  }
+
+  function switchDoc(docId) {
+    if (!docId || docId === APP.state.currentDocId) return;
+    APP.state.currentDocId = docId;
+    reloadAnnotation();
+  }
+
+  function onChange(e) {
+    var t = e.target;
+    if (!t || !t.hasAttribute) return;
+    if (t.hasAttribute("data-task-switch")) { switchTask(t.value); return; }
+    if (t.hasAttribute("data-doc-switch")) { switchDoc(t.value); return; }
+  }
+
   function headHtml() {
     var practice = !!APP.state.practice;
     var guide = (M.guide && M.guide.version) || "v1.2";
-    var doc = M.doc || {};
-    var taskId = APP.state.currentTaskId || doc.taskId || "T1";
+    var taskId = selectedTaskId();
+    var doc = selectedDoc();
+    var tasks = (APP.data && APP.data.tasks) || [];
+    var docs = documentsFor(taskId);
+    if (!docs.length) docs = [doc];
+    var taskSel = '<select data-task-switch style="width:auto;max-width:280px">' +
+      tasks.filter(function (t) { return !t.teaching || practice; }).map(function (t) {
+        return '<option value="' + APP.esc(t.id) + '"' + (t.id === taskId ? " selected" : "") + ">" +
+          APP.esc(t.id + " · " + t.name) + "</option>";
+      }).join("") + "</select>";
+    var docSel = '<select data-doc-switch style="width:auto;max-width:320px">' +
+      docs.map(function (d) {
+        return '<option value="' + APP.esc(d.id) + '"' + (d.id === doc.id ? " selected" : "") + ">" +
+          APP.esc(d.title || d.id) + "</option>";
+      }).join("") + "</select>";
     var notices = "";
     if (practice) notices += '<div class="notice info small mb12">练习数据与正式任务数据隔离（细节待确认，见问题清单）</div>';
     if (!canEdit) notices += '<div class="notice info small mb12">' + APP.esc(readOnlyNotice(APP.role())) + "</div>";
@@ -196,6 +258,11 @@
         '<button type="button" class="btn small" data-act="exit-practice">退出练习</button>' : "") +
       '<button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit">' + (practice ? "提交练习" : "提交") + "</button>" +
       "</div></div>" +
+      '<div class="toolbar">' +
+      '<label class="small muted">任务 ' + taskSel + "</label>" +
+      '<label class="small muted">文书 ' + docSel + "</label>" +
+      '<span class="small muted">切换任务/文书后按各自草稿加载</span>' +
+      "</div>" +
       notices;
   }
 
@@ -993,13 +1060,28 @@
     diagram: renderDiagram
   };
 
+  function bindOnce(root) {
+    if (root.__vaBound) return;
+    root.__vaBound = true;
+    root.addEventListener("click", onClick);
+    root.addEventListener("change", onChange);
+    root.addEventListener("mousedown", onMouseDown);
+    root.addEventListener("mouseover", onMouseOver);
+    root.addEventListener("mouseout", onMouseOut);
+    root.addEventListener("wheel", onWheel, { passive: false });
+  }
+
   function renderView(root, params) {
+    var docs = documentsFor(selectedTaskId());
+    if (docs.length && !docs.some(function (d) { return d.id === APP.state.currentDocId; })) {
+      APP.state.currentDocId = docs[0].id;
+    }
     ensure();
     hostRoot = root;
     canEdit = APP.role() === "annotator" || (APP.role() === "student" && APP.state.practice);
     if (APP.role() === "admin" && !S.adminDetail) {
       renderAdminOverview(root);
-      root.addEventListener("click", onClick);
+      bindOnce(root);
       return;
     }
     if (params && TAB_IDS.indexOf(params.mode) >= 0) S.tab = params.mode;
@@ -1015,11 +1097,7 @@
       '<div class="va-body"></div>' +
       "</div>";
     paint();
-    root.addEventListener("click", onClick);
-    root.addEventListener("mousedown", onMouseDown);
-    root.addEventListener("mouseover", onMouseOver);
-    root.addEventListener("mouseout", onMouseOut);
-    root.addEventListener("wheel", onWheel, { passive: false });
+    bindOnce(root);
   }
 
   APP.registerView("annotate", {

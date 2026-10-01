@@ -17,7 +17,7 @@
       actions.push({ label: "进入练习", kind: "primary", act: "teaching" });
     }
     if (role === "annotator" && !task.teaching && (task.status === "待裁定" || task.status === "已完成")) {
-      actions.push({ label: "查看裁定结果", act: "adjudicate" });
+      actions.push({ label: "查看比对结果", act: "compare" });
     }
     if ((role === "adjudicator" || role === "expert") && task.status === "待裁定") {
       actions.push({ label: "开始裁定", kind: "primary", act: "adjudicate" });
@@ -147,6 +147,7 @@
         APP.state.currentTaskId = task.id;
         if (act === "annotate") APP.goto("annotate", { mode: task.teaching ? "cut" : "cut", taskId: task.id });
         if (act === "adjudicate") APP.goto("adjudicate");
+        if (act === "compare") APP.goto("adjudicate", { compare: true });
         if (act === "export") APP.goto("export");
         if (act === "teaching") { APP.state.practice = task.teaching; APP.goto("teaching"); }
         if (act === "detail") detail(task);
