@@ -346,5 +346,114 @@ async function test(name, fn) {
     assert.strictEqual(d.hasChanges, false);
   });
 
+  console.log("annotate-logic.js · 论证图示自动布局");
+  const { buildDiagram } = global.window.APP.annotateLogic;
+  const layerOf = (dg, id) => {
+    const n = dg.nodes.concat(dg.relNodes).find(x => x.id === id);
+    return Math.round((n.x - 90) / 175);
+  };
+  await test("空关系表：返回空图且画布有最小尺寸", () => {
+    const d = buildDiagram([]);
+    assert.strictEqual(d.nodes.length, 0);
+    assert.strictEqual(d.relNodes.length, 0);
+    assert.strictEqual(d.edges.length, 0);
+    assert.ok(d.width >= 500 && d.height >= 620);
+  });
+  await test("J 组合：命题在第 0 层、关系节点第 1 层，连边无箭头", () => {
+    const d = buildDiagram([{ id: "R1", type: "J", members: ["P4", "P5"] }]);
+    assert.strictEqual(layerOf(d, "P4"), 0);
+    assert.strictEqual(layerOf(d, "P5"), 0);
+    assert.strictEqual(layerOf(d, "R1"), 1);
+    assert.strictEqual(d.relNodes[0].kind, "plus");
+    assert.deepStrictEqual(d.edges.map(e => e.arrow), [false, false]);
+  });
+  await test("S 嵌套链：最终结论命题位于最右层，关系节点到结论带箭头", () => {
+    const rels = [
+      { id: "R1", type: "J", members: ["P1", "P2"] },
+      { id: "R2", type: "S", members: ["R1", "P3"] }
+    ];
+    const d = buildDiagram(rels);
+    assert.strictEqual(layerOf(d, "R1"), 1);
+    assert.strictEqual(layerOf(d, "R2"), 2);
+    assert.strictEqual(layerOf(d, "P3"), 3);
+    const arrowEdges = d.edges.filter(e => e.arrow).map(e => [e.from, e.to]);
+    assert.deepStrictEqual(arrowEdges, [["R2", "P3"]]);
+  });
+  await test("A 反对：关系节点为 attack 且指向被反对者", () => {
+    const d = buildDiagram([{ id: "R1", type: "A", members: ["P1", "P2"] }]);
+    assert.strictEqual(d.relNodes[0].kind, "attack");
+    assert.deepStrictEqual(d.edges.filter(e => e.arrow).map(e => [e.from, e.to]), [["R1", "P2"]]);
+  });
+  await test("I 同一：slash 节点、连边无箭头", () => {
+    const d = buildDiagram([{ id: "R1", type: "I", members: ["P1", "P2"] }]);
+    assert.strictEqual(d.relNodes[0].kind, "slash");
+    assert.ok(d.edges.every(e => !e.arrow));
+  });
+  await test("同层节点不重叠，所有坐标在画布范围内", () => {
+    const d = buildDiagram(mockRels);
+    const all = d.nodes.concat(d.relNodes);
+    const byX = {};
+    all.forEach(n => {
+      assert.ok(n.x >= 20 && n.x <= d.width - 20, "x 越界:" + n.id);
+      assert.ok(n.y >= 20 && n.y <= d.height - 20, "y 越界:" + n.id);
+      (byX[n.x] = byX[n.x] || []).push(n.y);
+    });
+    Object.keys(byX).forEach(x => {
+      const ys = byX[x].slice().sort((a, b) => a - b);
+      for (let i = 1; i < ys.length; i++) assert.ok(ys[i] - ys[i - 1] >= 50, "同层节点重叠 x=" + x);
+    });
+  });
+  await test("MOCK 全量关系：10 个关系节点、20 条边，结论 P6/P9/P12/P13 在右层", () => {
+    const d = buildDiagram(mockRels);
+    assert.strictEqual(d.relNodes.length, 10);
+    assert.strictEqual(d.edges.length, 20);
+    [["P6", "R3"], ["P9", "R7"], ["P12", "R8"], ["P13", "R10"]].forEach(([p, r]) => {
+      assert.ok(layerOf(d, p) > layerOf(d, r), p + " 应在 " + r + " 的结论侧（更右层）");
+    });
+  });
+  await test("异常成环数据不死循环且节点齐全", () => {
+    const rels = [
+      { id: "R1", type: "S", members: ["R2", "P1"] },
+      { id: "R2", type: "S", members: ["R1", "P2"] }
+    ];
+    const d = buildDiagram(rels);
+    assert.strictEqual(d.relNodes.length, 2);
+    assert.strictEqual(d.nodes.length, 2);
+  });
+
+  console.log("annotate-logic.js · 图示拖拽建关系");
+  const { buildRelation } = global.window.APP.annotateLogic;
+  await test("正常建立 S：方向有序、formal 正确、分配新编号", () => {
+    const r = buildRelation([], "R11", "P1", "P2", "S");
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(r.rel, { id: "R11", type: "S", members: ["P1", "P2"], formal: "S(P1, P2)" });
+  });
+  await test("A/J/M 类型均可建立", () => {
+    ["A", "J", "M"].forEach(t => {
+      const r = buildRelation([], "R1", "P1", "P2", t);
+      assert.strictEqual(r.rel.type, t);
+      assert.strictEqual(r.rel.formal, t + "(P1, P2)");
+    });
+  });
+  await test("起止相同被拒绝", () => {
+    const r = buildRelation([], "R1", "P1", "P1", "S");
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.reason.indexOf("不能相同") >= 0);
+  });
+  await test("非法类型被拒绝", () => {
+    assert.strictEqual(buildRelation([], "R1", "P1", "P2", "X").ok, false);
+    assert.strictEqual(buildRelation([], "R1", "P1", "P2", "I").ok, false);
+  });
+  await test("S 有向：同向重复拒绝，反向允许（语义不同）", () => {
+    const exist = [{ id: "R1", type: "S", members: ["P1", "P2"], formal: "S(P1, P2)" }];
+    assert.strictEqual(buildRelation(exist, "R2", "P1", "P2", "S").ok, false);
+    assert.strictEqual(buildRelation(exist, "R2", "P2", "P1", "S").ok, true);
+  });
+  await test("J 无序：成员互换仍识别为重复；不同类型不混淆", () => {
+    const exist = [{ id: "R1", type: "J", members: ["P1", "P2"], formal: "J(P1, P2)" }];
+    assert.strictEqual(buildRelation(exist, "R2", "P2", "P1", "J").ok, false);
+    assert.strictEqual(buildRelation(exist, "R2", "P1", "P2", "M").ok, true);
+  });
+
   console.log("\n" + passed + " passed" + (process.exitCode ? ", 有失败" : ""));
 })();

@@ -350,6 +350,131 @@
     return out;
   }
 
+  // ===== 论证图示自动布局（依需求 2.1.8：由命题与关系自动生成）=====
+  function diagramKind(type) {
+    if (type === "S") return "support";
+    if (type === "A") return "attack";
+    if (type === "I") return "slash";
+    return "plus";
+  }
+
+  // 由关系表生成图示节点/边与分层坐标（纯函数；边方向即推理方向）：
+  // S/A：m0 → 关系节点 → m1（结论位）；M：前 n-1 个成员 → 关系节点 → 末成员；J/I：成员 → 关系节点（无向）
+  function buildDiagram(relations) {
+    var rels = relations || [];
+    var relMap = {};
+    rels.forEach(function (r) { relMap[r.id] = r; });
+
+    var arcs = [];
+    function addArc(from, to, arrow) { arcs.push({ from: from, to: to, arrow: !!arrow }); }
+    rels.forEach(function (r) {
+      var m = r.members || [];
+      if (r.type === "S" || r.type === "A") {
+        if (m.length >= 2) { addArc(m[0], r.id); addArc(r.id, m[1], true); }
+      } else if (r.type === "M") {
+        m.slice(0, m.length - 1).forEach(function (x) { addArc(x, r.id); });
+        if (m.length) addArc(r.id, m[m.length - 1], true);
+      } else {
+        m.forEach(function (x) { addArc(x, r.id); });
+      }
+    });
+
+    var ids = {};
+    rels.forEach(function (r) { ids[r.id] = true; });
+    arcs.forEach(function (a) { ids[a.from] = true; ids[a.to] = true; });
+    var all = Object.keys(ids);
+    var pred = {}, succ = {};
+    all.forEach(function (id) { pred[id] = []; succ[id] = []; });
+    arcs.forEach(function (a) {
+      pred[a.to].push(a.from);
+      succ[a.from].push(a.to);
+    });
+
+    // longest-path 分层：迭代至稳定；异常成环时 n 轮强制停止（层值有界）
+    var layer = {};
+    all.forEach(function (id) { layer[id] = 0; });
+    for (var iter = 0; iter <= all.length; iter++) {
+      var changed = false;
+      all.forEach(function (id) {
+        var v = 0;
+        pred[id].forEach(function (p) { v = Math.max(v, (layer[p] || 0) + 1); });
+        if (v !== layer[id]) { layer[id] = v; changed = true; }
+      });
+      if (!changed) break;
+    }
+
+    var maxLayer = 0;
+    all.forEach(function (id) { maxLayer = Math.max(maxLayer, layer[id]); });
+    var buckets = [];
+    for (var b = 0; b <= maxLayer; b++) buckets.push([]);
+    function numOf(id) { var m = /^[PR](\d+)$/.exec(id); return m ? Number(m[1]) : 9999; }
+    // 初始稳定序：命题在前、关系在后，各自按编号
+    all.sort(function (a, b2) {
+      var ra = relMap[a] ? 1 : 0, rb = relMap[b2] ? 1 : 0;
+      return ra - rb || numOf(a) - numOf(b2) || (a < b2 ? -1 : 1);
+    });
+    all.forEach(function (id) { buckets[layer[id]].push(id); });
+
+    // barycenter 往返扫描，减少层间连线交叉；无邻居节点保持原位
+    function rankOf(L, id) { return buckets[L].indexOf(id); }
+    function pass(forward) {
+      var L = forward ? 1 : maxLayer - 1;
+      for (; forward ? L <= maxLayer : L >= 0; L += forward ? 1 : -1) {
+        var neighborLayer = L + (forward ? -1 : 1);
+        var scored = buckets[L].map(function (id) {
+          var neighbors = forward ? pred[id] : succ[id];
+          var sum = 0, c = 0;
+          neighbors.forEach(function (n) {
+            if (layer[n] === neighborLayer) { sum += rankOf(neighborLayer, n); c++; }
+          });
+          return { id: id, b: c ? sum / c : rankOf(L, id) };
+        });
+        scored.sort(function (x, y) { return x.b - y.b; });
+        buckets[L] = scored.map(function (s) { return s.id; });
+      }
+    }
+    pass(true); pass(false); pass(true); pass(false);
+
+    var X0 = 90, DX = 175, Y0 = 80, DY = 82;
+    var pos = {}, maxCount = 0;
+    buckets.forEach(function (bucket, L) {
+      maxCount = Math.max(maxCount, bucket.length);
+      bucket.forEach(function (id, i) { pos[id] = { x: X0 + L * DX, y: Y0 + i * DY }; });
+    });
+
+    var nodes = [], relNodes = [];
+    buckets.forEach(function (bucket) {
+      bucket.forEach(function (id) {
+        if (relMap[id]) relNodes.push({ id: id, kind: diagramKind(relMap[id].type), x: pos[id].x, y: pos[id].y });
+        else nodes.push({ id: id, x: pos[id].x, y: pos[id].y });
+      });
+    });
+
+    return {
+      nodes: nodes,
+      relNodes: relNodes,
+      edges: arcs.map(function (a) { return { from: a.from, to: a.to, arrow: a.arrow }; }),
+      width: Math.max(500, X0 + maxLayer * DX + 110),
+      height: Math.max(620, Y0 + maxCount * DY + 30)
+    };
+  }
+
+  // 图示区拖拽建立两命题关系（仅 P→P）：校验并构造关系对象（纯函数）
+  // S/A 有序（a 为支持/反对者，b 为被支持/反对者）；J/M 成员无序
+  function buildRelation(relations, nextId, a, b, type) {
+    if (!a || !b || a === b) return { ok: false, reason: "起止要素不能相同" };
+    if (["S", "A", "J", "M"].indexOf(type) < 0) return { ok: false, reason: "未知关系类型" };
+    var dup = (relations || []).some(function (r) {
+      if (r.type !== type) return false;
+      var m = r.members;
+      if (type === "S" || type === "A") return m[0] === a && m[1] === b;
+      return m.length === 2 &&
+        ((m[0] === a && m[1] === b) || (m[0] === b && m[1] === a));
+    });
+    if (dup) return { ok: false, reason: "关系已存在：" + type + "(" + a + ", " + b + ")" };
+    return { ok: true, rel: { id: nextId, type: type, members: [a, b], formal: type + "(" + a + ", " + b + ")" } };
+  }
+
   window.APP = window.APP || {};
   window.APP.annotateLogic = {
     computeDeletion: computeDeletion,
@@ -361,6 +486,8 @@
     STAGE_NAMES: STAGE_NAMES,
     NESTED_DEMO_ORDER: NESTED_DEMO_ORDER,
     NESTED_DEMO_PATTERNS: NESTED_DEMO_PATTERNS,
-    buildNestedDemo: buildNestedDemo
+    buildNestedDemo: buildNestedDemo,
+    buildDiagram: buildDiagram,
+    buildRelation: buildRelation
   };
 })();

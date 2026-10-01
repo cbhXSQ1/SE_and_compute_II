@@ -417,7 +417,7 @@
     return Math.max(620, maxY + 60);
   }
 
-  function svgFor(dg) {
+  function svgFor(dg, link) {
     if (!dg) return "";
     var pos = {};
     (dg.nodes || []).forEach(function (n) { pos[n.id] = n; });
@@ -433,10 +433,25 @@
       return '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" ' + attr + "></line>";
     }).join("");
 
+    // 拖拽建关系的临时连线与落点高亮（pointer-events:none，避免遮挡 elementFromPoint 判定）
+    var linkSvg = "";
+    if (link && pos[link.from]) {
+      var f = pos[link.from];
+      linkSvg = '<line x1="' + f.x + '" y1="' + f.y + '" x2="' + link.x + '" y2="' + link.y +
+        '" stroke="#2563eb" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow)" pointer-events="none"></line>';
+      if (link.over && link.over !== link.from && pos[link.over]) {
+        var o = pos[link.over];
+        linkSvg += '<rect x="' + (o.x - 40) + '" y="' + (o.y - 21) + '" width="80" height="42" rx="8" fill="none" stroke="#2563eb" stroke-width="2.5" pointer-events="none"></rect>';
+      }
+    }
+
     var nodes = (dg.nodes || []).map(function (n) {
+      var handle = canEdit
+        ? '<circle class="va-handle" cx="34" cy="0" r="5" fill="#2563eb" stroke="#fff" stroke-width="1.5"><title>按住拖到另一命题建立关系</title></circle>'
+        : "";
       return '<g class="node" data-kind="node" data-id="' + APP.esc(n.id) + '" transform="translate(' + n.x + "," + n.y + ')">' +
         '<rect x="-34" y="-15" width="68" height="30" rx="6" fill="#fff" stroke="#1f2430"></rect>' +
-        '<text text-anchor="middle" y="4">' + APP.esc(n.id) + "</text></g>";
+        '<text text-anchor="middle" y="4">' + APP.esc(n.id) + "</text>" + handle + "</g>";
     }).join("");
 
     var rels = (dg.relNodes || []).map(function (n) {
@@ -452,16 +467,17 @@
       return '<g class="rel-node" data-kind="rel" data-id="' + APP.esc(n.id) + '" transform="translate(' + n.x + "," + n.y + ')">' + body + "</g>";
     }).join("");
 
-    return '<svg viewBox="0 0 800 ' + svgHeight(dg) + '" role="img" aria-label="' + APP.esc(dg.title || "") + '" xmlns="http://www.w3.org/2000/svg">' +
+    return '<svg viewBox="0 0 ' + (dg.width || 800) + " " + (dg.height || svgHeight(dg)) + '" role="img" aria-label="' + APP.esc(dg.title || "") + '" xmlns="http://www.w3.org/2000/svg">' +
       '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">' +
       '<path d="M0,0 L7,3 L0,6 z" fill="#667085"></path></marker></defs>' +
-      edges + nodes + rels + "</svg>";
+      edges + linkSvg + nodes + rels + "</svg>";
   }
 
   function redrawSvg() {
     var host = hostRoot.querySelector(".va-svg-host");
     var dg = curDiagram();
-    if (host && dg) host.innerHTML = svgFor(dg);
+    var link = dragState && dragState.mode === "link" ? dragState : null;
+    if (host && dg) host.innerHTML = svgFor(dg, link);
   }
 
   function relById(id) {
@@ -471,89 +487,12 @@
     return null;
   }
 
-  function relKind(type) {
-    if (type === "S") return "support";
-    if (type === "A") return "attack";
-    if (type === "I") return "slash";
-    return "plus";
-  }
-
   function buildDiagramFromRelations() {
-    var pos = {};
-    var seq = 0;
-    var cache = {};
-
-    function depthOf(id, seen) {
-      var r = relById(id);
-      if (!r) return 0;
-      if (cache[id] != null) return cache[id];
-      if (seen[id]) return 0;
-      seen[id] = true;
-      var d = 0;
-      r.members.forEach(function (m) {
-        if (relById(m)) d = Math.max(d, depthOf(m, seen));
-      });
-      seen[id] = false;
-      cache[id] = d + 1;
-      return cache[id];
-    }
-
-    APP.store.get("relations").forEach(function (r) {
-      pos[r.id] = { id: r.id, kind: relKind(r.type), depth: depthOf(r.id, {}), seq: seq++ };
-    });
-    APP.store.get("relations").forEach(function (r) {
-      r.members.forEach(function (m) {
-        if (!pos[m]) pos[m] = { id: m, kind: "", depth: 0, seq: seq++ };
-      });
-    });
-
-    var list = Object.keys(pos).map(function (k) { return pos[k]; });
-    list.sort(function (a, b) { return a.depth - b.depth || a.seq - b.seq; });
-    var layer = {};
-    list.forEach(function (n) {
-      var i = layer[n.depth] || 0;
-      layer[n.depth] = i + 1;
-      n.x = 80 + n.depth * 190;
-      n.y = 90 + i * 80;
-    });
-    list.forEach(function (n) {
-      if (!n.kind) return;
-      var minY = Infinity;
-      var maxY = -Infinity;
-      relById(n.id).members.forEach(function (m) {
-        if (!pos[m]) return;
-        minY = Math.min(minY, pos[m].y);
-        maxY = Math.max(maxY, pos[m].y);
-      });
-      if (minY !== Infinity) n.y = Math.round((minY + maxY) / 2);
-    });
-
-    var nodes = [];
-    var relNodes = [];
-    list.forEach(function (n) {
-      if (n.kind) relNodes.push({ id: n.id, kind: n.kind, x: n.x, y: n.y });
-      else nodes.push({ id: n.id, x: n.x, y: n.y });
-    });
-
-    var edges = [];
-    APP.store.get("relations").forEach(function (r) {
-      var members = r.members;
-      if (r.type === "S" || r.type === "A") {
-        edges.push({ from: members[0], to: r.id });
-        edges.push({ from: r.id, to: members[1], arrow: true });
-      } else if (r.type === "M") {
-        members.slice(0, members.length - 1).forEach(function (m) {
-          edges.push({ from: m, to: r.id });
-        });
-        edges.push({ from: r.id, to: members[members.length - 1], arrow: true });
-      } else {
-        members.forEach(function (m) {
-          edges.push({ from: m, to: r.id });
-        });
-      }
-    });
-
-    return { id: "dg-gen", title: GEN_TITLE, generated: true, nodes: nodes, relNodes: relNodes, edges: edges };
+    var d = APP.annotateLogic.buildDiagram(APP.store.get("relations"));
+    d.id = "dg-gen";
+    d.title = GEN_TITLE;
+    d.generated = true;
+    return d;
   }
 
   function rebuildDiagram() {
@@ -678,6 +617,51 @@
       APP.ui.toast("已删除关系 " + id + "（演示）");
     }
     if (!afterRelChange()) paint();
+  }
+
+  // ===== 图示区拖拽建关系（仅命题间，依需求 2.1.7「拖动图元建立关系」）=====
+  var LINK_REL_TYPES = {
+    S: { name: "支持", desc: "起点命题支持终点命题，终点为结论（有向）" },
+    A: { name: "反对", desc: "起点命题反对终点命题（有向）" },
+    J: { name: "组合", desc: "两个命题合取后共同发挥作用（成员无序）" },
+    M: { name: "匹配", desc: "个别命题与一般命题相匹配（成员无序）" }
+  };
+
+  function openLinkTypeModal(a, b) {
+    var segA = segById(a), segB = segById(b);
+    if (!segA || !segB || !segA.type || !segB.type) {
+      APP.ui.toast("参与关系的命题必须已标注类型", "warn");
+      return;
+    }
+    var rows = Object.keys(LINK_REL_TYPES).map(function (t) {
+      return "<li><b>" + t + " " + LINK_REL_TYPES[t].name + "</b>：" + LINK_REL_TYPES[t].desc + "</li>";
+    }).join("");
+    var actions = Object.keys(LINK_REL_TYPES).map(function (t) {
+      return {
+        label: t + " " + LINK_REL_TYPES[t].name,
+        kind: t === "S" ? "primary" : "",
+        onClick: function () { return createLinkRel(a, b, t); }
+      };
+    });
+    actions.push({ label: "取消", kind: "" });
+    APP.ui.modal({
+      title: "建立关系 " + a + " → " + b,
+      body: '<p>在 <b>' + a + "</b> 与 <b>" + b + '</b> 之间选择关系类型：</p>' +
+        '<ul class="small muted" style="margin:8px 0 8px 18px;line-height:1.7">' + rows + "</ul>" +
+        '<p class="small muted">有向关系（S/A）以拖动起点为支持者/反对者；嵌套关系请在关系标注表建立。</p>',
+      actions: actions
+    });
+  }
+
+  function createLinkRel(a, b, type) {
+    var r = APP.annotateLogic.buildRelation(APP.store.get("relations"), nextRelId(), a, b, type);
+    if (!r.ok) {
+      APP.ui.toast(r.reason, "warn");
+      return false; // 保留弹窗，可改选其他类型
+    }
+    APP.store.get("relations").push(r.rel);
+    APP.ui.toast("图示建关系：" + r.rel.formal + "（" + r.rel.id + "），图示已自动重排");
+    rebuildDiagram();
   }
 
   function makeRel() {
@@ -1186,16 +1170,15 @@
   function onMouseDown(e) {
     if (!canEdit) return;
     if (e.button !== 0 || S.tab !== "diagram") return;
-    var g = e.target.closest ? e.target.closest(".node, .rel-node") : null;
-    if (!g) return;
+    var handle = e.target.closest ? e.target.closest(".va-handle") : null;
+    var g = handle ? handle.parentNode : (e.target.closest ? e.target.closest(".node, .rel-node") : null);
+    if (!g || !g.getAttribute) return;
     var svg = hostRoot.querySelector("#va-diagram svg");
     if (!svg) return;
     e.preventDefault();
-    dragState = {
-      kind: g.getAttribute("data-kind"),
-      id: g.getAttribute("data-id"),
-      rect: svg.getBoundingClientRect()
-    };
+    dragState = handle
+      ? { mode: "link", from: g.getAttribute("data-id"), x: 0, y: 0, over: null, rect: svg.getBoundingClientRect() }
+      : { mode: "move", kind: g.getAttribute("data-kind"), id: g.getAttribute("data-id"), rect: svg.getBoundingClientRect() };
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   }
@@ -1204,14 +1187,26 @@
     if (!dragState) return;
     var dg = curDiagram();
     if (!dg) return;
-    var scale = 800 / dragState.rect.width;
+    var w = dg.width || 800;
+    var scale = w / dragState.rect.width;
     var x = Math.round((e.clientX - dragState.rect.left) * scale);
     var y = Math.round((e.clientY - dragState.rect.top) * scale);
-    x = Math.max(20, Math.min(780, x));
-    y = Math.max(20, Math.min(svgHeight(dg) - 20, y));
+    x = Math.max(20, Math.min(w - 20, x));
+    y = Math.max(20, Math.min((dg.height || svgHeight(dg)) - 20, y));
+    if (dragState.mode === "link") {
+      dragState.x = x;
+      dragState.y = y;
+      var el = document.elementFromPoint(e.clientX, e.clientY);
+      var ng = el && el.closest ? el.closest(".node") : null;
+      var overId = ng ? ng.getAttribute("data-id") : null;
+      dragState.over = overId && overId !== dragState.from ? overId : null;
+      redrawSvg();
+      return;
+    }
     var list = dragState.kind === "rel" ? dg.relNodes : dg.nodes;
     for (var i = 0; i < list.length; i++) {
       if (list[i].id === dragState.id) {
+        if (list[i].x !== x || list[i].y !== y) dragState.moved = true;
         list[i].x = x;
         list[i].y = y;
         break;
@@ -1220,10 +1215,26 @@
     redrawSvg();
   }
 
-  function onMouseUp() {
+  function onMouseUp(e) {
+    var st = dragState;
     dragState = null;
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
+    if (!st) return;
+    if (st.mode === "link") {
+      redrawSvg();
+      if (st.over) {
+        openLinkTypeModal(st.from, st.over);
+      } else if (e && document.elementFromPoint) {
+        var el = document.elementFromPoint(e.clientX, e.clientY);
+        if (el && el.closest && el.closest(".rel-node")) {
+          APP.ui.toast("图示仅支持命题之间拖拽建关系；嵌套关系请在关系标注表建立", "warn");
+        }
+      }
+      return;
+    }
+    // 拖拽结束：坐标随 diagrams 持久化到草稿（坐标调整不涉及语义，不留历史版本）
+    if (st.moved) APP.store.touch("diagrams");
   }
 
   function onMouseOver(e) {
