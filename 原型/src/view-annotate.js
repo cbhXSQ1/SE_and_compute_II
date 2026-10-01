@@ -4,9 +4,9 @@
   var READONLY_MSG = "只读模式：当前角色不能修改标注";
   var READONLY_BLOCKED = {
     "submit": true,
-    "re-extract": true, "drag-range": true, "submit-cut": true,
+    "re-extract": true, "suggest-cut": true, "drag-range": true, "submit-cut": true,
     "pre-number": true, "delete-elem": true, "submit-elements": true,
-    "make-rel": true, "demo-nested": true,
+    "make-rel": true, "submit-relations": true,
     "rebuild-diagram": true, "submit-diagram": true
   };
 
@@ -96,7 +96,8 @@
         relations: (d.relations || []).map(function (r) {
           return { id: r.id, type: r.type, members: r.members.slice(), formal: r.formal };
         }),
-        diagrams: d.diagrams || []
+        diagrams: d.diagrams || [],
+        history: []
       });
       S.cutSubmitted = APP.store.get("pieces").length > 0;
       if (hostRoot && document.body.contains(hostRoot)) {
@@ -189,6 +190,7 @@
       '<span class="tag gray">指南 ' + APP.esc(guide) + "</span>" +
       (canEdit ? "" : '<span class="tag gray">只读模式</span>') +
       '<button type="button" class="tag green" data-act="save">已保存</button>' +
+      '<button type="button" class="btn small" data-act="show-history">历史版本</button>' +
       (practice ? '<span class="tag violet">练习模式</span>' +
         '<button type="button" class="btn small" data-act="exit-practice">退出练习</button>' : "") +
       '<button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit">' + (practice ? "提交练习" : "提交") + "</button>" +
@@ -292,6 +294,7 @@
     return '<div class="toolbar">' +
       '<span class="small muted">已加框要素数：<b class="va-box-count">' + boxed + "</b> / " + APP.store.get("pieces").length + "</span>" +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="re-extract">重新提取</button>' +
+      '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="suggest-cut">按规则预切割</button>' +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="drag-range">手动拖动调整</button>' +
       "</div>" +
       '<div class="paper' + (canEdit ? "" : " va-disabled") + '">' + APP.store.get("pieces").map(function (p) {
@@ -382,7 +385,7 @@
         ? S.relPicked.map(function (id) { return '<span class="code-chip">' + APP.esc(id) + "</span>"; }).join(" ")
         : '<span class="muted">未选择</span>') + "</div>" +
       '<div class="row"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="make-rel">生成关系</button></div>' +
-      '<div class="row"><button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="demo-nested">演示嵌套：反对一个支持关系</button></div>' +
+      nestedDemoHtml() +
       "</div>";
 
     var rows = APP.store.get("relations").map(function (r) {
@@ -400,6 +403,8 @@
       '<table class="table va-rel-table"><thead><tr><th>编号</th><th>类型</th><th>成员</th><th>形式化表达</th><th></th></tr></thead>' +
       "<tbody>" + (rows || '<tr><td colspan="5" class="muted">暂无关系</td></tr>') + "</tbody></table>" +
       '<div class="notice info mt12">独立支持与组合支持不可混同：分别独立支持写作多条 S(pi, pj)；合取支持写作 S(J(...), pj)。</div>' +
+      '<div class="row mt12"><button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-relations">提交关系标注</button>' +
+      '<span class="small muted">提交后留痕为历史版本，可在右上角「历史版本」查看</span></div>' +
       "</div>";
 
     return '<div class="workbench">' + left + mid + right + "</div>";
@@ -412,7 +417,7 @@
     return Math.max(620, maxY + 60);
   }
 
-  function svgFor(dg) {
+  function svgFor(dg, link) {
     if (!dg) return "";
     var pos = {};
     (dg.nodes || []).forEach(function (n) { pos[n.id] = n; });
@@ -428,10 +433,25 @@
       return '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" ' + attr + "></line>";
     }).join("");
 
+    // 拖拽建关系的临时连线与落点高亮（pointer-events:none，避免遮挡 elementFromPoint 判定）
+    var linkSvg = "";
+    if (link && pos[link.from]) {
+      var f = pos[link.from];
+      linkSvg = '<line x1="' + f.x + '" y1="' + f.y + '" x2="' + link.x + '" y2="' + link.y +
+        '" stroke="#2563eb" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow)" pointer-events="none"></line>';
+      if (link.over && link.over !== link.from && pos[link.over]) {
+        var o = pos[link.over];
+        linkSvg += '<rect x="' + (o.x - 40) + '" y="' + (o.y - 21) + '" width="80" height="42" rx="8" fill="none" stroke="#2563eb" stroke-width="2.5" pointer-events="none"></rect>';
+      }
+    }
+
     var nodes = (dg.nodes || []).map(function (n) {
+      var handle = canEdit
+        ? '<circle class="va-handle" cx="34" cy="0" r="5" fill="#2563eb" stroke="#fff" stroke-width="1.5"><title>按住拖到另一命题建立关系</title></circle>'
+        : "";
       return '<g class="node" data-kind="node" data-id="' + APP.esc(n.id) + '" transform="translate(' + n.x + "," + n.y + ')">' +
         '<rect x="-34" y="-15" width="68" height="30" rx="6" fill="#fff" stroke="#1f2430"></rect>' +
-        '<text text-anchor="middle" y="4">' + APP.esc(n.id) + "</text></g>";
+        '<text text-anchor="middle" y="4">' + APP.esc(n.id) + "</text>" + handle + "</g>";
     }).join("");
 
     var rels = (dg.relNodes || []).map(function (n) {
@@ -447,16 +467,17 @@
       return '<g class="rel-node" data-kind="rel" data-id="' + APP.esc(n.id) + '" transform="translate(' + n.x + "," + n.y + ')">' + body + "</g>";
     }).join("");
 
-    return '<svg viewBox="0 0 800 ' + svgHeight(dg) + '" role="img" aria-label="' + APP.esc(dg.title || "") + '" xmlns="http://www.w3.org/2000/svg">' +
+    return '<svg viewBox="0 0 ' + (dg.width || 800) + " " + (dg.height || svgHeight(dg)) + '" role="img" aria-label="' + APP.esc(dg.title || "") + '" xmlns="http://www.w3.org/2000/svg">' +
       '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">' +
       '<path d="M0,0 L7,3 L0,6 z" fill="#667085"></path></marker></defs>' +
-      edges + nodes + rels + "</svg>";
+      edges + linkSvg + nodes + rels + "</svg>";
   }
 
   function redrawSvg() {
     var host = hostRoot.querySelector(".va-svg-host");
     var dg = curDiagram();
-    if (host && dg) host.innerHTML = svgFor(dg);
+    var link = dragState && dragState.mode === "link" ? dragState : null;
+    if (host && dg) host.innerHTML = svgFor(dg, link);
   }
 
   function relById(id) {
@@ -466,89 +487,12 @@
     return null;
   }
 
-  function relKind(type) {
-    if (type === "S") return "support";
-    if (type === "A") return "attack";
-    if (type === "I") return "slash";
-    return "plus";
-  }
-
   function buildDiagramFromRelations() {
-    var pos = {};
-    var seq = 0;
-    var cache = {};
-
-    function depthOf(id, seen) {
-      var r = relById(id);
-      if (!r) return 0;
-      if (cache[id] != null) return cache[id];
-      if (seen[id]) return 0;
-      seen[id] = true;
-      var d = 0;
-      r.members.forEach(function (m) {
-        if (relById(m)) d = Math.max(d, depthOf(m, seen));
-      });
-      seen[id] = false;
-      cache[id] = d + 1;
-      return cache[id];
-    }
-
-    APP.store.get("relations").forEach(function (r) {
-      pos[r.id] = { id: r.id, kind: relKind(r.type), depth: depthOf(r.id, {}), seq: seq++ };
-    });
-    APP.store.get("relations").forEach(function (r) {
-      r.members.forEach(function (m) {
-        if (!pos[m]) pos[m] = { id: m, kind: "", depth: 0, seq: seq++ };
-      });
-    });
-
-    var list = Object.keys(pos).map(function (k) { return pos[k]; });
-    list.sort(function (a, b) { return a.depth - b.depth || a.seq - b.seq; });
-    var layer = {};
-    list.forEach(function (n) {
-      var i = layer[n.depth] || 0;
-      layer[n.depth] = i + 1;
-      n.x = 80 + n.depth * 190;
-      n.y = 90 + i * 80;
-    });
-    list.forEach(function (n) {
-      if (!n.kind) return;
-      var minY = Infinity;
-      var maxY = -Infinity;
-      relById(n.id).members.forEach(function (m) {
-        if (!pos[m]) return;
-        minY = Math.min(minY, pos[m].y);
-        maxY = Math.max(maxY, pos[m].y);
-      });
-      if (minY !== Infinity) n.y = Math.round((minY + maxY) / 2);
-    });
-
-    var nodes = [];
-    var relNodes = [];
-    list.forEach(function (n) {
-      if (n.kind) relNodes.push({ id: n.id, kind: n.kind, x: n.x, y: n.y });
-      else nodes.push({ id: n.id, x: n.x, y: n.y });
-    });
-
-    var edges = [];
-    APP.store.get("relations").forEach(function (r) {
-      var members = r.members;
-      if (r.type === "S" || r.type === "A") {
-        edges.push({ from: members[0], to: r.id });
-        edges.push({ from: r.id, to: members[1], arrow: true });
-      } else if (r.type === "M") {
-        members.slice(0, members.length - 1).forEach(function (m) {
-          edges.push({ from: m, to: r.id });
-        });
-        edges.push({ from: r.id, to: members[members.length - 1], arrow: true });
-      } else {
-        members.forEach(function (m) {
-          edges.push({ from: m, to: r.id });
-        });
-      }
-    });
-
-    return { id: "dg-gen", title: GEN_TITLE, generated: true, nodes: nodes, relNodes: relNodes, edges: edges };
+    var d = APP.annotateLogic.buildDiagram(APP.store.get("relations"));
+    d.id = "dg-gen";
+    d.title = GEN_TITLE;
+    d.generated = true;
+    return d;
   }
 
   function rebuildDiagram() {
@@ -659,9 +603,65 @@
       APP.ui.toast(READONLY_MSG, "warn");
       return;
     }
-    APP.store.set("relations", APP.store.get("relations").filter(function (r) { return r.id !== id; }));
-    APP.ui.toast("已删除关系 " + id + "（演示）");
+    var rels = APP.store.get("relations");
+    var target = null;
+    rels.forEach(function (r) { if (r.id === id) target = r; });
+    if (target && target.demoKey) {
+      var key = target.demoKey;
+      var p = APP.annotateLogic.NESTED_DEMO_PATTERNS[key];
+      var n = rels.filter(function (r) { return r.demoKey === key; }).length;
+      APP.store.set("relations", rels.filter(function (r) { return r.demoKey !== key; }));
+      APP.ui.toast("已删除整套「" + (p ? p.name : key) + "」演示（" + n + " 条关系）");
+    } else {
+      APP.store.set("relations", rels.filter(function (r) { return r.id !== id; }));
+      APP.ui.toast("已删除关系 " + id + "（演示）");
+    }
     if (!afterRelChange()) paint();
+  }
+
+  // ===== 图示区拖拽建关系（仅命题间，依需求 2.1.7「拖动图元建立关系」）=====
+  var LINK_REL_TYPES = {
+    S: { name: "支持", desc: "起点命题支持终点命题，终点为结论（有向）" },
+    A: { name: "反对", desc: "起点命题反对终点命题（有向）" },
+    J: { name: "组合", desc: "两个命题合取后共同发挥作用（成员无序）" },
+    M: { name: "匹配", desc: "个别命题与一般命题相匹配（成员无序）" }
+  };
+
+  function openLinkTypeModal(a, b) {
+    var segA = segById(a), segB = segById(b);
+    if (!segA || !segB || !segA.type || !segB.type) {
+      APP.ui.toast("参与关系的命题必须已标注类型", "warn");
+      return;
+    }
+    var rows = Object.keys(LINK_REL_TYPES).map(function (t) {
+      return "<li><b>" + t + " " + LINK_REL_TYPES[t].name + "</b>：" + LINK_REL_TYPES[t].desc + "</li>";
+    }).join("");
+    var actions = Object.keys(LINK_REL_TYPES).map(function (t) {
+      return {
+        label: t + " " + LINK_REL_TYPES[t].name,
+        kind: t === "S" ? "primary" : "",
+        onClick: function () { return createLinkRel(a, b, t); }
+      };
+    });
+    actions.push({ label: "取消", kind: "" });
+    APP.ui.modal({
+      title: "建立关系 " + a + " → " + b,
+      body: '<p>在 <b>' + a + "</b> 与 <b>" + b + '</b> 之间选择关系类型：</p>' +
+        '<ul class="small muted" style="margin:8px 0 8px 18px;line-height:1.7">' + rows + "</ul>" +
+        '<p class="small muted">有向关系（S/A）以拖动起点为支持者/反对者；嵌套关系请在关系标注表建立。</p>',
+      actions: actions
+    });
+  }
+
+  function createLinkRel(a, b, type) {
+    var r = APP.annotateLogic.buildRelation(APP.store.get("relations"), nextRelId(), a, b, type);
+    if (!r.ok) {
+      APP.ui.toast(r.reason, "warn");
+      return false; // 保留弹窗，可改选其他类型
+    }
+    APP.store.get("relations").push(r.rel);
+    APP.ui.toast("图示建关系：" + r.rel.formal + "（" + r.rel.id + "），图示已自动重排");
+    rebuildDiagram();
   }
 
   function makeRel() {
@@ -691,20 +691,56 @@
     if (!afterRelChange()) paint();
   }
 
-  function demoNested() {
-    var d = M.nestedDemo;
-    if (!d) return;
-    var exists = APP.store.get("relations").some(function (r) { return r.demo && r.formal === d.formal; });
-    if (exists) {
-      APP.ui.toast("嵌套示例已在关系表中（" + d.formal + "）", "warn");
+  // 《指南》六种嵌套形式演示：一键插入整套关系链（内层→外层）
+  function nestedDemoHtml() {
+    var L = APP.annotateLogic;
+    var inserted = {};
+    APP.store.get("relations").forEach(function (r) { if (r.demoKey) inserted[r.demoKey] = true; });
+    var btns = L.NESTED_DEMO_ORDER.map(function (key) {
+      var p = L.NESTED_DEMO_PATTERNS[key];
+      var done = !!inserted[key];
+      return '<button type="button" class="btn small' + ((canEdit && !done) ? "" : " va-disabled") +
+        '" data-demo-key="' + key + '" title="' + APP.esc(p.expr) + (done ? "（已插入）" : "") + '">' +
+        APP.esc(p.name) + "</button>";
+    }).join("");
+    return '<div class="small muted mt8">嵌套关系演示（依《指南》六种形式，悬停看形式化表达）：</div>' +
+      '<div class="tag-options">' + btns + "</div>";
+  }
+
+  function addNestedDemo(key) {
+    if (!canEdit) {
+      APP.ui.toast(READONLY_MSG, "warn");
       return;
     }
-    var id = d.id;
-    var taken = APP.store.get("relations").some(function (r) { return r.id === id; });
-    if (taken) id = nextRelId();
-    APP.store.get("relations").push({ id: id, type: d.type, members: d.members.slice(), formal: d.formal, demo: true });
-    APP.ui.toast("已添加嵌套关系（关系可指向另一关系）");
-    paint();
+    var L = APP.annotateLogic;
+    var p = L.NESTED_DEMO_PATTERNS[key];
+    if (!p) return;
+    var rels = APP.store.get("relations");
+    if (rels.some(function (r) { return r.demoKey === key; })) {
+      APP.ui.toast("「" + p.name + "」演示已在关系表中", "warn");
+      return;
+    }
+    var segs = APP.store.get("segments");
+    var typed = segs.filter(function (s) { return !!s.type; });
+    var pool = (typed.length >= p.need ? typed : segs).slice(0, p.need).map(function (s) { return s.id; });
+    if (pool.length < p.need) {
+      APP.ui.toast("当前要素不足，该形式至少需要 " + p.need + " 个要素", "warn");
+      return;
+    }
+    var max = 0;
+    rels.forEach(function (r) {
+      var m = /^R(\d+)$/.exec(r.id);
+      if (m) max = Math.max(max, Number(m[1]));
+    });
+    var res = L.buildNestedDemo(key, pool, max + 1);
+    if (res.error) {
+      APP.ui.toast(res.error, "warn");
+      return;
+    }
+    res.rels.forEach(function (r) { rels.push(r); });
+    APP.store.touch("relations");
+    APP.ui.toast("已插入「" + p.name + "」演示：" + res.rels[res.rels.length - 1].formal);
+    if (!afterRelChange()) paint();
   }
 
   function deriveSegmentsFromCut() {
@@ -722,6 +758,214 @@
     S.picked = "";
     S.relPicked = [];
     S.relType = "";
+  }
+
+  function suggestCut() {
+    if (!canEdit) {
+      APP.ui.toast(READONLY_MSG, "warn");
+      return;
+    }
+    var text = (M.doc && M.doc.reasonText) || "";
+    var res = APP.annotateLogic.suggestCut(text);
+    if (!res.pieces.length) {
+      APP.ui.toast("未找到可切割文本", "warn");
+      return;
+    }
+    var willReset = APP.store.get("segments").length > 0;
+    var rows = res.pieces.map(function (p, i) {
+      return "<tr><td class='mono'>" + (i + 1) + "</td><td>" + APP.esc(p.text) + "</td><td>" +
+        p.rules.map(function (r) { return '<span class="tag violet">' + APP.esc(r) + "</span>"; }).join(" ") +
+        "</td></tr>";
+    }).join("");
+    APP.ui.modal({
+      title: "按《指南》规则预切割",
+      body: '<p class="small muted">系统已执行四条机械规则：①句号（。！？）为界首切；②句内按逗号、分号切出子句；③双引号内容整体保留；④过渡语（如“本院认为，”“本案中，”“综上所述，”）并入其后第一个子句' +
+        (res.mergedTransitions ? "（本次并入 <b>" + res.mergedTransitions + "</b> 处）" : "") + '。</p>' +
+        '<p class="small"><b>规则②的语义判定不自动执行</b>：连续子句若为同一性质且相互间无支持/反对关系，应合并为一个要素，请在应用后人工合并（点击去框即可）。</p>' +
+        (willReset ? '<div class="notice small mb8"><b>注意：</b>切割已提交并进入后续阶段，应用预切割将清空已生成的要素、关系与图示，需重新标注。</div>' : "") +
+        '<p class="small muted">共生成 <b>' + res.pieces.length + '</b> 个建议片段（默认全部加框）：</p>' +
+        '<div style="max-height:38vh;overflow:auto;border:1px solid var(--border,#ddd);border-radius:6px">' +
+        '<table class="table va-rel-table"><thead><tr><th style="width:36px">#</th><th>建议片段</th><th style="width:170px">依据</th></tr></thead>' +
+        "<tbody>" + rows + "</tbody></table></div>",
+      actions: [
+        { label: "取消", kind: "" },
+        {
+          label: "应用预切割", kind: "primary", onClick: function () {
+            APP.store.set("pieces", res.pieces.map(function (p, i) {
+              return { id: "s" + (i + 1), text: p.text, boxed: true };
+            }));
+            if (willReset) {
+              APP.store.patch({ segments: [], relations: [], diagrams: [] });
+              S.cutSubmitted = false;
+              S.dg = 0;
+              S.picked = "";
+              S.relPicked = [];
+              S.relType = "";
+            }
+            paint();
+            APP.ui.toast("已按规则预切割为 " + res.pieces.length + " 个片段，请人工核对/合并后提交", "ok");
+          }
+        }
+      ]
+    });
+  }
+
+  // 阶段历史：每次正式提交压入一个只读快照（内存保存，刷新即清空；与草稿分离）
+  function recordStage(stage, note) {
+    var hist = APP.store.get("history");
+    var v = APP.annotateLogic.makeSnapshot(APP.store.get(), stage, APP.roleName(), hist.length + 1, note);
+    hist.push(v);
+    APP.store.touch("history");
+    return v;
+  }
+
+  function fmtTs(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    function p(n) { return n < 10 ? "0" + n : "" + n; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  function shortText(t, n) {
+    n = n || 22;
+    return t.length > n ? t.slice(0, n) + "…" : t;
+  }
+
+  function showHistory() {
+    var hist = APP.store.get("history");
+    var body;
+    if (!hist.length) {
+      body = '<p class="small muted">暂无历史版本。各阶段（文本切割、要素标注、关系标注、论证图示）每次正式提交后，系统会自动保存一个只读快照，供仲裁追溯与过程复现。</p>' +
+        '<p class="small muted">说明：历史版本仅保存于本次会话内存中（原型演示），不随草稿持久化。</p>';
+    } else {
+      var rows = hist.slice().reverse().map(function (v) {
+        return "<tr><td class='mono'>" + v.id + "</td>" +
+          "<td><span class='tag violet'>" + APP.esc(v.stageName) + "</span>" +
+          (v.note ? '<div class="small muted">' + APP.esc(v.note) + "</div>" : "") + "</td>" +
+          "<td class='small'>" + fmtTs(v.ts) + "</td>" +
+          "<td class='small'>" + APP.esc(v.operator) + "</td>" +
+          "<td class='small muted'>片段 " + v.counts.pieces + " · 要素 " + v.counts.segments +
+          " · 关系 " + v.counts.relations + " · 图示 " + v.counts.diagrams + "</td>" +
+          "<td><button type='button' class='btn small' data-hist-ver='" + v.seq + "'>查看差异</button></td></tr>";
+      }).join("");
+      body = '<p class="small muted">共 <b>' + hist.length + "</b> 个已提交版本（最新在上）。点「查看差异」可看该版本相对上一版的具体变化，标注员可在确认后回滚（回滚前会自动备份当前状态）。</p>" +
+        '<div style="max-height:46vh;overflow:auto;border:1px solid var(--border,#ddd);border-radius:6px">' +
+        '<table class="table va-rel-table"><thead><tr><th style="width:52px">版本</th><th style="width:120px">阶段</th><th style="width:150px">提交时间</th><th style="width:80px">操作者</th><th>内容统计</th><th style="width:86px">操作</th></tr></thead>' +
+        "<tbody>" + rows + "</tbody></table></div>";
+    }
+    APP.ui.modal({
+      title: "历史版本（各阶段提交留痕）",
+      body: body,
+      actions: [{ label: "关闭", kind: "primary" }]
+    });
+    var modalEl = document.getElementById("modal-root");
+    if (modalEl && !modalEl._histBound) {
+      modalEl._histBound = true;
+      modalEl.addEventListener("click", function (e) {
+        var t = e.target.closest ? e.target.closest("button[data-hist-ver]") : null;
+        if (t) showVersionDetail(Number(t.getAttribute("data-hist-ver")));
+      });
+    }
+  }
+
+  function diffBlockHtml(title, items, render) {
+    if (!items.length) return "";
+    return '<div class="small mt8"><b>' + title + "（" + items.length + "）</b><ul class='small mt4'>" +
+      items.map(render).join("") + "</ul></div>";
+  }
+
+  function showVersionDetail(seq) {
+    var hist = APP.store.get("history");
+    var idx = -1;
+    hist.forEach(function (v, i) { if (v.seq === seq) idx = i; });
+    if (idx < 0) return;
+    var v = hist[idx];
+    var prevSnap = idx > 0 ? hist[idx - 1].snapshot : null;
+    var d = APP.annotateLogic.diffStates(prevSnap, v.snapshot);
+    var esc = APP.esc;
+    var chip = function (cls, t) { return '<span class="tag ' + cls + '">' + esc(t) + "</span>"; };
+
+    var body = '<p class="small">版本 <b>' + v.id + '</b> · ' + chip("violet", v.stageName) +
+      " · " + fmtTs(v.ts) + " · 操作者 " + esc(v.operator) + "</p>" +
+      (v.note ? '<p class="small muted">' + esc(v.note) + "</p>" : "") +
+      '<p class="small muted">相对 ' + (idx > 0 ? "上一版 " + hist[idx - 1].id : "空初始状态") + " 的具体变化：</p>";
+
+    if (!d.hasChanges) {
+      body += '<div class="notice small">与上一版内容完全相同（无数据变化）。</div>';
+    } else {
+      body += diffBlockHtml("切割：新加框片段", d.pieces.boxedAdded, function (t) {
+        return "<li>" + chip("green", "加框") + " " + esc(shortText(t, 40)) + "</li>";
+      });
+      body += diffBlockHtml("切割：取消加框片段", d.pieces.boxedRemoved, function (t) {
+        return "<li>" + chip("amber", "去框") + " " + esc(shortText(t, 40)) + "</li>";
+      });
+      body += diffBlockHtml("要素：新增", d.segments.added, function (id) {
+        return "<li><span class='code-chip'>" + esc(id) + "</span></li>";
+      });
+      body += diffBlockHtml("要素：删除（后续自动重编号）", d.segments.removed, function (id) {
+        return "<li><span class='code-chip'>" + esc(id) + "</span></li>";
+      });
+      body += diffBlockHtml("要素：类型标注/修改", d.segments.typeChanged, function (c) {
+        return "<li><span class='code-chip'>" + esc(c.id) + "</span> " + esc(c.before) +
+          ' <span class="muted">→</span> ' + chip("green", c.after) + "</li>";
+      });
+      body += diffBlockHtml("关系：新增", d.relations.added, function (r) {
+        return "<li><span class='code-chip'>" + esc(r.id) + "</span> " + esc(r.formal) + "</li>";
+      });
+      body += diffBlockHtml("关系：删除（级联）", d.relations.removed, function (r) {
+        return "<li><span class='code-chip'>" + esc(r.id) + "</span> " + esc(r.formal) + "</li>";
+      });
+      body += diffBlockHtml("关系：形式化表达更新", d.relations.changed, function (r) {
+        return "<li><span class='code-chip'>" + esc(r.id) + "</span> " + esc(r.before) +
+          ' <span class="muted">→</span> ' + esc(r.after) + "</li>";
+      });
+      body += diffBlockHtml("图示：新增/删除", d.diagrams.added.concat(d.diagrams.removed), function (id) {
+        return "<li><span class='code-chip'>" + esc(id) + "</span></li>";
+      });
+    }
+
+    var actions = [{
+      label: "返回列表", kind: "", onClick: function () { showHistory(); return false; }
+    }];
+    if (canEdit) actions.push({ label: "回滚到此版本", kind: "primary", onClick: function () { confirmRollback(v); return false; } });
+    APP.ui.modal({
+      title: "版本差异 " + v.id + "（" + v.stageName + "）",
+      body: body,
+      actions: actions
+    });
+  }
+
+  function confirmRollback(v) {
+    if (!canEdit) {
+      APP.ui.toast(READONLY_MSG, "warn");
+      return;
+    }
+    APP.ui.modal({
+      title: "回滚确认：恢复到 " + v.id,
+      body: "<p>将把当前工作区数据恢复为版本 <b>" + v.id + "（" + APP.esc(v.stageName) + "，" + fmtTs(v.ts) +
+        "）</b> 时的内容，并停留在该阶段。</p>" +
+        '<div class="notice small mb8"><b>非破坏式回滚：</b>系统会先把<b>当前状态</b>自动另存为一个「回滚前备份」版本，之后再覆盖工作区；若回滚有误，可在历史列表中再滚回该备份。</div>' +
+        '<p class="small muted">回滚后切割/要素/关系/图示四类数据都会回到当时状态，可继续编辑并重新提交。</p>',
+      actions: [
+        { label: "取消", kind: "" },
+        {
+          label: "确认回滚", kind: "primary", onClick: function () {
+            var backup = recordStage("backup", "回滚到 " + v.id + " 前的自动备份");
+            var snap = JSON.parse(JSON.stringify(v.snapshot));
+            APP.store.patch(snap);
+            S.cutSubmitted = snap.pieces.some(function (p) { return p.boxed; });
+            S.picked = "";
+            S.relPicked = [];
+            S.relType = "";
+            S.dg = 0;
+            setTab(v.stage === "backup" ? "cut" : v.stage);
+            paint();
+            APP.ui.toast("已回滚到 " + v.id + "；当前旧状态已备份为 " + backup.id, "ok");
+          }
+        }
+      ]
+    });
   }
 
   function submitCut() {
@@ -756,8 +1000,9 @@
         { label: "返回调整", kind: "" },
         { label: "确认提交", kind: "primary", onClick: function () {
           deriveSegmentsFromCut();
+          var v = recordStage("cut");
           setTab("elements");
-          APP.ui.toast("切割已提交，自动生成 " + count + " 个要素（P1–P" + count + "），请进入要素标注补充类型", "ok");
+          APP.ui.toast("切割已提交，自动生成 " + count + " 个要素（P1–P" + count + "），已留痕为历史版本 " + v.id, "ok");
         } }
       ]
     });
@@ -766,7 +1011,8 @@
   function submitElements() {
     var un = APP.store.get("segments").filter(function (s) { return !s.type; });
     if (!un.length) {
-      APP.ui.toast("要素标注已提交（演示）");
+      var v = recordStage("elements");
+      APP.ui.toast("要素标注已提交，已留痕为历史版本 " + v.id + "（演示）");
       return;
     }
     APP.ui.modal({
@@ -776,7 +1022,10 @@
         "</ul><p class='warn-text'>存在未标注要素，正式流程应补齐后再提交；原型中可继续提交以便演示。</p>",
       actions: [
         { label: "返回修改" },
-        { label: "仍然提交", kind: "primary", onClick: function () { APP.ui.toast("已提交（含未标注要素，演示）"); } }
+        { label: "仍然提交", kind: "primary", onClick: function () {
+          var v2 = recordStage("elements");
+          APP.ui.toast("已提交（含未标注要素，演示），已留痕为历史版本 " + v2.id);
+        } }
       ]
     });
   }
@@ -787,18 +1036,80 @@
       APP.ui.toast("请先选择要删除的要素", "warn");
       return;
     }
-    var related = APP.store.get("relations").filter(function (r) { return r.members.indexOf(s.id) >= 0; });
-    APP.ui.confirm("确定删除要素 " + s.id + " 吗？", function () {
-      APP.store.set("segments", APP.store.get("segments").filter(function (x) { return x.id !== s.id; }));
-      var i = S.relPicked.indexOf(s.id);
-      if (i >= 0) S.relPicked.splice(i, 1);
-      S.picked = "";
-      if (related.length) {
-        APP.ui.toast(s.id + " 存在 " + related.length + " 条关联关系，正式流程需一并处理（示意）", "warn");
-      } else {
-        APP.ui.toast("已删除要素 " + s.id + "（演示）");
+    var res = APP.annotateLogic.computeDeletion({
+      segments: APP.store.get("segments"),
+      relations: APP.store.get("relations"),
+      diagrams: APP.store.get("diagrams")
+    }, s.id);
+
+    var n = APP.store.get("segments").length;
+    var num = parseInt(s.id.slice(1), 10);
+    var body = "<p>删除要素 <b>" + APP.esc(s.id) + "</b> 后，后续要素将按原文顺序自动重编号" +
+      (num < n ? "（P" + (num + 1) + "–P" + n + " → P" + num + "–P" + (n - 1) + "）" : "") + "。</p>";
+
+    if (res.removed.length || res.modified.length) {
+      body += '<div class="notice info small mt12"><b>对已建立关系的影响：</b></div>';
+      if (res.removed.length) {
+        body += '<div class="small mt8">以下关系将一并删除：</div><ul class="small mt4">' +
+          res.removed.map(function (r) {
+            return "<li><span class='code-chip'>" + APP.esc(r.id) + "</span> " + APP.esc(r.formal) +
+              '<span class="muted"> — ' + APP.esc(r.reason) + "</span></li>";
+          }).join("") + "</ul>";
       }
-      paint();
+      if (res.modified.length) {
+        body += '<div class="small mt8">以下关系的成员编号将同步更新：</div><ul class="small mt4">' +
+          res.modified.map(function (r) {
+            return "<li><span class='code-chip'>" + APP.esc(r.id) + "</span> " +
+              APP.esc(r.before) + " → <b>" + APP.esc(r.after) + "</b></li>";
+          }).join("") + "</ul>";
+      }
+    } else {
+      body += '<p class="small muted mt8">该要素未参与任何关系。</p>';
+    }
+    body += '<p class="small muted mt8">论证图示中该命题节点及相关连线将同步移除。</p>';
+
+    APP.ui.modal({
+      title: "删除要素 " + s.id,
+      body: body,
+      actions: [
+        { label: "取消" },
+        {
+          label: "确认删除", kind: "primary", onClick: function () {
+            APP.store.patch({
+              segments: res.segments,
+              relations: res.relations,
+              diagrams: res.diagrams
+            });
+            S.picked = "";
+            var removedIds = {};
+            res.removed.forEach(function (r) { removedIds[r.id] = true; });
+            S.relPicked = S.relPicked.filter(function (id) {
+              return id !== s.id && !removedIds[id];
+            }).map(function (id) {
+              return id.charAt(0) === "P" && res.pmap[id] ? res.pmap[id] : id;
+            });
+            paint();
+            var msg = "已删除 " + s.id + "，后续要素已重编号";
+            APP.ui.toast(res.removed.length ? msg + "；" + res.removed.length + " 条关系已一并删除" : msg, res.removed.length ? "warn" : "ok");
+          }
+        }
+      ]
+    });
+  }
+
+  function submitRelations() {
+    var n = APP.store.get("relations").length;
+    APP.ui.modal({
+      title: "提交关系标注",
+      body: "<p>当前关系表共 <b>" + n + "</b> 条关系（含嵌套关系的内层关系）。</p>" +
+        '<p class="small muted">提交后该阶段结果将留痕为历史版本，供仲裁员审查与过程复现；提交后仍可返回修改，再次提交会生成新版本。</p>',
+      actions: [
+        { label: "取消" },
+        { label: "确认提交", kind: "primary", onClick: function () {
+          var v = recordStage("relations");
+          APP.ui.toast("关系标注已提交，已留痕为历史版本 " + v.id);
+        } }
+      ]
     });
   }
 
@@ -811,7 +1122,10 @@
         "<li><b>遗漏</b>：命题与关系是否完整呈现</li></ul>",
       actions: [
         { label: "取消" },
-        { label: "确认提交", kind: "primary", onClick: function () { APP.ui.toast("已提交仲裁员审查"); } }
+        { label: "确认提交", kind: "primary", onClick: function () {
+          var v = recordStage("diagram");
+          APP.ui.toast("已提交仲裁员审查，已留痕为历史版本 " + v.id);
+        } }
       ]
     });
   }
@@ -828,13 +1142,15 @@
     if (name === "save") { APP.ui.toast("已保存到草稿"); return; }
     if (name === "submit") { APP.ui.toast(APP.state.practice ? "已提交练习（演示）" : "已提交（演示）"); return; }
     if (name === "re-extract") { APP.ui.toast("已按指南重新提取切割片段（演示）"); return; }
+    if (name === "suggest-cut") { suggestCut(); return; }
     if (name === "drag-range") { APP.ui.pending("手动拖动调整切割范围"); return; }
     if (name === "submit-cut") { submitCut(); return; }
     if (name === "pre-number") { APP.ui.toast("已启用「先编号后补标签」（演示）：新要素可暂缺类型，编号保留，待后续补标"); return; }
     if (name === "delete-elem") { deleteElem(); return; }
     if (name === "submit-elements") { submitElements(); return; }
     if (name === "make-rel") { makeRel(); return; }
-    if (name === "demo-nested") { demoNested(); return; }
+    if (name === "submit-relations") { submitRelations(); return; }
+    if (name === "show-history") { showHistory(); return; }
     if (name === "rebuild-diagram") { rebuildDiagram(); APP.ui.toast("已按关系表重建图示（演示）"); return; }
     if (name === "exit-practice") {
       APP.state.practice = false;
@@ -854,16 +1170,15 @@
   function onMouseDown(e) {
     if (!canEdit) return;
     if (e.button !== 0 || S.tab !== "diagram") return;
-    var g = e.target.closest ? e.target.closest(".node, .rel-node") : null;
-    if (!g) return;
+    var handle = e.target.closest ? e.target.closest(".va-handle") : null;
+    var g = handle ? handle.parentNode : (e.target.closest ? e.target.closest(".node, .rel-node") : null);
+    if (!g || !g.getAttribute) return;
     var svg = hostRoot.querySelector("#va-diagram svg");
     if (!svg) return;
     e.preventDefault();
-    dragState = {
-      kind: g.getAttribute("data-kind"),
-      id: g.getAttribute("data-id"),
-      rect: svg.getBoundingClientRect()
-    };
+    dragState = handle
+      ? { mode: "link", from: g.getAttribute("data-id"), x: 0, y: 0, over: null, rect: svg.getBoundingClientRect() }
+      : { mode: "move", kind: g.getAttribute("data-kind"), id: g.getAttribute("data-id"), rect: svg.getBoundingClientRect() };
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   }
@@ -872,14 +1187,26 @@
     if (!dragState) return;
     var dg = curDiagram();
     if (!dg) return;
-    var scale = 800 / dragState.rect.width;
+    var w = dg.width || 800;
+    var scale = w / dragState.rect.width;
     var x = Math.round((e.clientX - dragState.rect.left) * scale);
     var y = Math.round((e.clientY - dragState.rect.top) * scale);
-    x = Math.max(20, Math.min(780, x));
-    y = Math.max(20, Math.min(svgHeight(dg) - 20, y));
+    x = Math.max(20, Math.min(w - 20, x));
+    y = Math.max(20, Math.min((dg.height || svgHeight(dg)) - 20, y));
+    if (dragState.mode === "link") {
+      dragState.x = x;
+      dragState.y = y;
+      var el = document.elementFromPoint(e.clientX, e.clientY);
+      var ng = el && el.closest ? el.closest(".node") : null;
+      var overId = ng ? ng.getAttribute("data-id") : null;
+      dragState.over = overId && overId !== dragState.from ? overId : null;
+      redrawSvg();
+      return;
+    }
     var list = dragState.kind === "rel" ? dg.relNodes : dg.nodes;
     for (var i = 0; i < list.length; i++) {
       if (list[i].id === dragState.id) {
+        if (list[i].x !== x || list[i].y !== y) dragState.moved = true;
         list[i].x = x;
         list[i].y = y;
         break;
@@ -888,10 +1215,26 @@
     redrawSvg();
   }
 
-  function onMouseUp() {
+  function onMouseUp(e) {
+    var st = dragState;
     dragState = null;
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
+    if (!st) return;
+    if (st.mode === "link") {
+      redrawSvg();
+      if (st.over) {
+        openLinkTypeModal(st.from, st.over);
+      } else if (e && document.elementFromPoint) {
+        var el = document.elementFromPoint(e.clientX, e.clientY);
+        if (el && el.closest && el.closest(".rel-node")) {
+          APP.ui.toast("图示仅支持命题之间拖拽建关系；嵌套关系请在关系标注表建立", "warn");
+        }
+      }
+      return;
+    }
+    // 拖拽结束：坐标随 diagrams 持久化到草稿（坐标调整不涉及语义，不留历史版本）
+    if (st.moved) APP.store.touch("diagrams");
   }
 
   function onMouseOver(e) {
@@ -926,6 +1269,8 @@
     if (t) { S.picked = t.getAttribute("data-seg"); paint(); return; }
     t = e.target.closest ? e.target.closest("button[data-del-rel]") : null;
     if (t) { delRel(t.getAttribute("data-del-rel")); return; }
+    t = e.target.closest ? e.target.closest("button[data-demo-key]") : null;
+    if (t) { addNestedDemo(t.getAttribute("data-demo-key")); return; }
     t = e.target.closest ? e.target.closest("button[data-dg]") : null;
     if (t) { S.dg = Number(t.getAttribute("data-dg")) || 0; paint(); return; }
   }
