@@ -9,6 +9,13 @@
       var draft = window.APP.persist && window.APP.persist.load(taskId, docId);
       if (draft) return ok(draft);
       var m = window.MOCK || {};
+      var dd = (m.docData && docId && m.docData[docId]) || null;
+      if (dd) return ok({
+        pieces: dd.pieces || [],
+        segments: dd.segments || [],
+        relations: dd.relations || [],
+        diagrams: dd.diagrams || []
+      });
       return ok({
         pieces: m.pieces || [],
         segments: m.segments || [],

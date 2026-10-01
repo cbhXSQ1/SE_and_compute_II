@@ -191,6 +191,13 @@
     return docs[0] || (M && M.doc) || {};
   }
 
+  function currentTask() {
+    var tasks = (APP.data && APP.data.tasks) || [];
+    var tid = selectedTaskId();
+    for (var i = 0; i < tasks.length; i++) { if (tasks[i].id === tid) return tasks[i]; }
+    return null;
+  }
+
   function reloadAnnotation() {
     S.ready = false;
     S.rendered = false;
@@ -244,6 +251,10 @@
     var notices = "";
     if (practice) notices += '<div class="notice info small mb12">练习数据与正式任务数据隔离（细节待确认，见问题清单）</div>';
     if (!canEdit) notices += '<div class="notice info small mb12">' + APP.esc(readOnlyNotice(APP.role())) + "</div>";
+    var curTask = currentTask();
+    if (curTask && (curTask.status === "待裁定" || curTask.status === "已完成")) {
+      notices += '<div class="notice small mb12">该任务当前状态为「' + APP.esc(curTask.status) + '」，标注已锁定、不可修改；如需重标请新建任务。</div>';
+    }
     var back = APP.role() === "admin" && S.adminDetail
       ? '<button type="button" class="btn small" data-act="admin-back">返回总览</button>' : "";
     return '<div class="page-head">' +
@@ -1078,7 +1089,9 @@
     }
     ensure();
     hostRoot = root;
-    canEdit = APP.role() === "annotator" || (APP.role() === "student" && APP.state.practice);
+    var task = currentTask();
+    var locked = !!task && task.status !== "标注中" && task.status !== "待标注";
+    canEdit = (APP.role() === "annotator" && !locked) || (APP.role() === "student" && APP.state.practice);
     if (APP.role() === "admin" && !S.adminDetail) {
       renderAdminOverview(root);
       bindOnce(root);
