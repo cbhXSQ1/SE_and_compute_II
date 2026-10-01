@@ -22,7 +22,7 @@ window.APP = (function () {
     { id: "people", label: "人员管理", roles: ["admin"] },
     { id: "create", label: "任务创建", roles: ["admin", "teacher"] },
     { id: "annotate", label: "标注工作台", roles: ["admin", "annotator", "student"] },
-    { id: "adjudicate", label: "裁定", roles: ["admin", "adjudicator", "expert"] },
+    { id: "adjudicate", label: "裁定", roles: ["admin", "annotator", "adjudicator", "expert"] },
     { id: "export", label: "导出", roles: ["admin", "adjudicator"] },
     { id: "teaching", label: "教学展示", roles: ["admin", "teacher", "student"] }
   ];

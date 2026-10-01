@@ -16,6 +16,9 @@
     if (role === "annotator" && task.teaching) {
       actions.push({ label: "进入练习", kind: "primary", act: "teaching" });
     }
+    if (role === "annotator" && !task.teaching && (task.status === "待裁定" || task.status === "已完成")) {
+      actions.push({ label: "查看裁定结果", act: "adjudicate" });
+    }
     if ((role === "adjudicator" || role === "expert") && task.status === "待裁定") {
       actions.push({ label: "开始裁定", kind: "primary", act: "adjudicate" });
     }
