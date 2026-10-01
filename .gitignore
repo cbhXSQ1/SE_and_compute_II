@@ -1,4 +1,7 @@
 /*
 !/.gitignore
+!/.trae/
+/.trae/*
+!/.trae/skills/
 !/原型/
 !/系统需求梳理.md

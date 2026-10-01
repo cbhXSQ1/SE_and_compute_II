@@ -162,6 +162,8 @@ input:focus,select:focus,textarea:focus{outline:2px solid #cdddfb;border-color:v
   linear-gradient(#f0f2f5 1px,transparent 1px) 0 0/24px 24px,
   linear-gradient(90deg,#f0f2f5 1px,transparent 1px) 0 0/24px 24px}
 .diagram .node{cursor:grab}
+.diagram .node .va-handle{cursor:crosshair}
+.diagram .node .va-handle:hover{fill:#1d4ed8}
 .diagram .node text{font-size:12px;font-family:"Segoe UI","Microsoft YaHei",sans-serif;user-select:none}
 .rel-node text{font-size:12px;font-weight:700}
 
