@@ -62,7 +62,7 @@
     relType: "",
     relPicked: [],
     dg: 0,
-    zoom: false,
+    zoom: 1, panX: 0, panY: 0,
     adminDetail: false
   };
   var hostRoot = null;
@@ -71,7 +71,10 @@
 
   APP.ui.addStyle("view-annotate",
     "button.tag{font-family:inherit;font-size:12px;cursor:pointer}" +
-    ".diagram.va-zoom{transform:scale(.8);transform-origin:top center}" +
+    ".va-viewport{position:relative;overflow:hidden;height:600px;background:#fff;cursor:grab}" +
+    ".va-viewport.grabbing{cursor:grabbing}" +
+    ".va-pan{position:absolute;top:0;left:0;width:100%;transform-origin:0 0;will-change:transform}" +
+    ".va-zoom-label{font-size:12px;color:var(--muted);min-width:40px;text-align:center}" +
     ".diagram .rel-node{cursor:grab}" +
     ".legend i.plus,.legend i.slash{display:inline-flex;align-items:center;justify-content:center;font-style:normal;font-weight:700;font-size:9px;line-height:1;color:var(--ink)}" +
     ".list-item.va-disabled{opacity:.55;cursor:not-allowed}" +
@@ -582,11 +585,17 @@
     return '<div class="tabs">' + subTabs + "</div>" +
       '<div class="row mb8">' + legend + '<span class="spacer"></span>' +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="rebuild-diagram">按关系表重建图示（演示）</button>' +
-      '<button type="button" class="btn small" data-act="zoom">缩放示意</button>' +
+      '<button type="button" class="btn small" data-act="zoom-out">缩小</button>' +
+      '<span class="va-zoom-label" data-slot="zoom-label">' + Math.round(S.zoom * 100) + "%</span>" +
+      '<button type="button" class="btn small" data-act="zoom-in">放大</button>' +
+      '<button type="button" class="btn small" data-act="zoom-reset">重置</button>' +
       '<button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-diagram">提交仲裁员审查</button></div>' +
-      (dg ? '<div class="diagram' + (S.zoom ? " va-zoom" : "") + (canEdit ? "" : " va-disabled") + '" id="va-diagram"><div class="va-svg-host">' + svgFor(dg) + "</div></div>"
+      (dg ? '<div class="diagram' + (canEdit ? "" : " va-disabled") + '" id="va-diagram">' +
+        '<div class="va-viewport">' +
+        '<div class="va-pan" data-slot="pan" style="transform:translate(' + S.panX + 'px,' + S.panY + 'px) scale(' + S.zoom + ')">' +
+        '<div class="va-svg-host">' + svgFor(dg) + "</div></div></div></div>"
         : '<div class="empty">暂无图示数据</div>') +
-      '<div class="notice info mt12">命题节点以带框序号表示；命题类型仅存在于标注表/数据库，不进入图示（依《指南》6.1）。</div>';
+      '<div class="notice info mt12">命题节点以带框序号表示；命题类型仅存在于标注表/数据库，不进入图示（依《指南》6.1）。滚轮缩放、拖拽空白处平移、拖拽节点调整位置。</div>';
   }
 
   function nextRelId() {
@@ -793,34 +802,79 @@
       APP.ui.toast("已退出练习模式");
       return;
     }
-    if (name === "zoom") {
-      S.zoom = !S.zoom;
-      var d = hostRoot.querySelector("#va-diagram");
-      if (d) d.classList.toggle("va-zoom", S.zoom);
-      return;
-    }
+    if (name === "zoom-in") { zoomBy(1.25); return; }
+    if (name === "zoom-out") { zoomBy(1 / 1.25); return; }
+    if (name === "zoom-reset") { S.zoom = 1; S.panX = 0; S.panY = 0; applyView(); return; }
     if (name === "submit-diagram") { submitDiagram(); return; }
   }
 
+  function clampZoom(z) { return Math.max(0.4, Math.min(2.5, z)); }
+
+  function applyView() {
+    var pan = hostRoot.querySelector("#va-diagram .va-pan");
+    if (pan) pan.style.transform = "translate(" + S.panX + "px," + S.panY + "px) scale(" + S.zoom + ")";
+    var label = hostRoot.querySelector('[data-slot="zoom-label"]');
+    if (label) label.textContent = Math.round(S.zoom * 100) + "%";
+  }
+
+  function zoomBy(factor) {
+    S.zoom = clampZoom(S.zoom * factor);
+    applyView();
+  }
+
+  function onWheel(e) {
+    if (S.tab !== "diagram") return;
+    if (!e.target.closest || !e.target.closest("#va-diagram")) return;
+    var vp = hostRoot.querySelector("#va-diagram .va-viewport");
+    if (!vp) return;
+    e.preventDefault();
+    var rect = vp.getBoundingClientRect();
+    var cx = e.clientX - rect.left;
+    var cy = e.clientY - rect.top;
+    var prev = S.zoom;
+    var next = clampZoom(prev * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
+    if (next === prev) return;
+    S.panX = cx - (cx - S.panX) * (next / prev);
+    S.panY = cy - (cy - S.panY) * (next / prev);
+    S.zoom = next;
+    applyView();
+  }
+
   function onMouseDown(e) {
-    if (!canEdit) return;
     if (e.button !== 0 || S.tab !== "diagram") return;
     var g = e.target.closest ? e.target.closest(".node, .rel-node") : null;
-    if (!g) return;
-    var svg = hostRoot.querySelector("#va-diagram svg");
-    if (!svg) return;
+    if (g) {
+      if (!canEdit) return;
+      var svg = hostRoot.querySelector("#va-diagram svg");
+      if (!svg) return;
+      e.preventDefault();
+      dragState = {
+        mode: "node",
+        kind: g.getAttribute("data-kind"),
+        id: g.getAttribute("data-id"),
+        rect: svg.getBoundingClientRect()
+      };
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+      return;
+    }
+    var vp = e.target.closest ? e.target.closest("#va-diagram .va-viewport") : null;
+    if (!vp) return;
     e.preventDefault();
-    dragState = {
-      kind: g.getAttribute("data-kind"),
-      id: g.getAttribute("data-id"),
-      rect: svg.getBoundingClientRect()
-    };
+    if (vp.classList) vp.classList.add("grabbing");
+    dragState = { mode: "pan", startX: e.clientX, startY: e.clientY, baseX: S.panX, baseY: S.panY };
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   }
 
   function onMouseMove(e) {
     if (!dragState) return;
+    if (dragState.mode === "pan") {
+      S.panX = dragState.baseX + (e.clientX - dragState.startX);
+      S.panY = dragState.baseY + (e.clientY - dragState.startY);
+      applyView();
+      return;
+    }
     var dg = curDiagram();
     if (!dg) return;
     var scale = 800 / dragState.rect.width;
@@ -843,6 +897,8 @@
     dragState = null;
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
+    var vp = hostRoot.querySelector("#va-diagram .va-viewport");
+    if (vp && vp.classList) vp.classList.remove("grabbing");
   }
 
   function onMouseOver(e) {
@@ -914,6 +970,7 @@
     root.addEventListener("mousedown", onMouseDown);
     root.addEventListener("mouseover", onMouseOver);
     root.addEventListener("mouseout", onMouseOut);
+    root.addEventListener("wheel", onWheel, { passive: false });
   }
 
   APP.registerView("annotate", {

@@ -9,11 +9,13 @@
   var RO_NOTES = {
     annotator: "标注者可查看最终裁定结果并与自身标注比对（只读）；裁定操作请由仲裁员执行。",
     student: "学生为只读查看；请在教学展示中完成练习。",
-    teacher: "教师为只读查看。"
+    teacher: "教师为只读查看。",
+    expert: "领域专家：裁决核心概念分歧并更新疑难问题说明文档；逐项的认可/重标请由仲裁员执行。"
   };
-  var store = { filter: "全部", single: false, diffs: null, expert: [], docs: null, picked: "" };
+  var store = { filter: "全部", single: false, diffs: null, expert: [], docs: null, picked: "", viewAs: "A" };
   var host = null;
   var canAdj = false;
+  var canExpert = false;
 
   function nowStr() {
     var t = new Date();
@@ -34,6 +36,7 @@
   function kindCls(kind) { return KIND_CLS[kind] || "gray"; }
 
   function roOff() { return canAdj ? "" : ' aria-disabled="true"'; }
+  function roOffExpert() { return canExpert ? "" : ' aria-disabled="true"'; }
 
   function find(id) {
     return store.diffs.filter(function (d) { return d.id === id; })[0];
@@ -145,8 +148,38 @@
       '<div data-slot="docs">' + docsHTML() + "</div>" +
       '<h4 class="mt16">专家裁决记录</h4>' +
       '<div class="mb12" data-slot="expert">' + expertHTML() + "</div>" +
-      '<button type="button" class="btn primary" data-act="expert"' + roOff() + ">提交专家裁决</button>" +
+      '<button type="button" class="btn primary" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>" +
       "</div>";
+  }
+
+  function myCompareHTML() {
+    if (APP.role() !== "annotator") return "";
+    var asA = store.viewAs !== "B";
+    var rows = store.diffs.map(function (d) {
+      var mine = asA ? d.a : d.b;
+      var verdict = '<span class="tag gray">待裁定</span>';
+      if (d.result) {
+        var aligned;
+        if (/^认可\s*A/.test(d.result)) aligned = asA;
+        else if (/^认可\s*B/.test(d.result)) aligned = !asA;
+        else aligned = true;
+        verdict = aligned ? '<span class="tag green">与裁定一致</span>' : '<span class="tag amber">与裁定不同</span>';
+      }
+      return "<tr>" +
+        '<td><span class="code-chip">' + APP.esc(d.target) + "</span></td>" +
+        "<td>" + APP.esc(mine) + "</td>" +
+        "<td>" + (d.result ? APP.esc(d.result) : '<span class="muted">未裁定</span>') + "</td>" +
+        "<td>" + verdict + "</td></tr>";
+    }).join("");
+    return '<div class="card">' +
+      '<div class="row mb8"><h3 style="margin:0">我的标注结果与最终裁定比对</h3><span class="spacer"></span>' +
+      '<label class="small muted">以谁的视角 <select data-view-as style="width:auto;display:inline-block">' +
+      '<option value="A"' + (asA ? " selected" : "") + ">标注员A（刘标注）</option>" +
+      '<option value="B"' + (!asA ? " selected" : "") + ">标注员B（陈标注）</option>" +
+      "</select></label></div>" +
+      '<div class="small muted mb8">依《指南》8.2.4：标注者可查看最终裁定结果，并与自己的标注结果进行比对。</div>' +
+      '<table class="table"><thead><tr><th style="width:90px">差异点</th><th>我的标注</th><th>最终裁定</th><th style="width:120px">比对</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="4" class="muted">暂无差异项</td></tr>') + "</tbody></table></div>";
   }
 
   function paperHTML() {
@@ -163,7 +196,7 @@
   }
 
   function layoutHTML() {
-    var roTag = canAdj ? "" : '<span class="tag gray">只读模式</span>';
+    var roTag = (canAdj || canExpert) ? "" : '<span class="tag gray">只读模式</span>';
     var roNote = canAdj ? "" : '<div class="notice mt12">' + APP.esc(RO_NOTES[APP.role()] || "当前角色为只读查看。") + "</div>";
     return '<div class="page">' +
       '<div class="page-head"><div><h2>裁定工作台</h2><div class="sub">双人独立标注结果比对：自动/半自动比对，人工裁定（依《指南》8.2.4）</div></div>' +
@@ -180,13 +213,14 @@
       '<span class="spacer"></span>' +
       '<span class="small muted" data-slot="count">' + countText() + "</span>" +
       '<button type="button" class="btn' + (store.single ? " toggled" : "") + '" data-act="single">单版本模式</button>' +
-      '<button type="button" class="btn" data-act="expert"' + roOff() + ">提交专家裁决</button>" +
+      '<button type="button" class="btn" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>" +
       '<button type="button" class="btn primary" data-act="finish"' + roOff() + ">完成裁定</button>" +
       "</div>" +
       '<div class="adj-layout">' +
       paperHTML() +
       '<div class="adj-main">' +
       '<div class="adj-list' + (store.single ? " adj-single" : "") + '">' + listHTML() + "</div>" +
+      '<div data-slot="mycompare">' + myCompareHTML() + "</div>" +
       sidebarHTML() +
       "</div>" +
       "</div>" +
@@ -324,6 +358,11 @@
       var btn = e.target.closest("[data-act]");
       if (!btn) return;
       var act = btn.getAttribute("data-act");
+      if (act === "expert") {
+        if (!canExpert) { APP.ui.toast("只读模式：当前角色不能提交专家裁决", "warn"); return; }
+        expertModal();
+        return;
+      }
       if (!canAdj && act !== "filter" && act !== "single") {
         APP.ui.toast("只读模式：当前角色不能执行裁定操作", "warn");
         return;
@@ -344,7 +383,6 @@
         paintList();
         return;
       }
-      if (act === "expert") { expertModal(); return; }
       if (act === "finish") { finish(); return; }
       var d = find(btn.getAttribute("data-id"));
       if (!d) return;
@@ -353,12 +391,20 @@
       if (act === "rebook" || act === "revise") rebook(d);
       if (act === "confirm") resolve(d, "确认通过（单版本）");
     });
+    root.addEventListener("change", function (e) {
+      var sel = e.target && e.target.closest ? e.target.closest("[data-view-as]") : null;
+      if (!sel) return;
+      store.viewAs = sel.value === "B" ? "B" : "A";
+      var el = host.querySelector('[data-slot="mycompare"]');
+      if (el) el.innerHTML = myCompareHTML();
+    });
   }
 
   APP.registerView("adjudicate", {
     title: "裁定工作台",
     render: function (root) {
-      canAdj = ["adjudicator", "expert", "admin"].indexOf(APP.role()) !== -1;
+      canAdj = ["adjudicator", "admin"].indexOf(APP.role()) !== -1;
+      canExpert = ["expert", "admin"].indexOf(APP.role()) !== -1;
       host = root;
       ensure();
       APP.ui.addStyle("view-adjudicate",

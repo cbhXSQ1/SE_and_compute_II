@@ -1799,7 +1799,7 @@ window.APP = (function () {
     relType: "",
     relPicked: [],
     dg: 0,
-    zoom: false,
+    zoom: 1, panX: 0, panY: 0,
     adminDetail: false
   };
   var hostRoot = null;
@@ -1808,7 +1808,10 @@ window.APP = (function () {
 
   APP.ui.addStyle("view-annotate",
     "button.tag{font-family:inherit;font-size:12px;cursor:pointer}" +
-    ".diagram.va-zoom{transform:scale(.8);transform-origin:top center}" +
+    ".va-viewport{position:relative;overflow:hidden;height:600px;background:#fff;cursor:grab}" +
+    ".va-viewport.grabbing{cursor:grabbing}" +
+    ".va-pan{position:absolute;top:0;left:0;width:100%;transform-origin:0 0;will-change:transform}" +
+    ".va-zoom-label{font-size:12px;color:var(--muted);min-width:40px;text-align:center}" +
     ".diagram .rel-node{cursor:grab}" +
     ".legend i.plus,.legend i.slash{display:inline-flex;align-items:center;justify-content:center;font-style:normal;font-weight:700;font-size:9px;line-height:1;color:var(--ink)}" +
     ".list-item.va-disabled{opacity:.55;cursor:not-allowed}" +
@@ -2319,11 +2322,17 @@ window.APP = (function () {
     return '<div class="tabs">' + subTabs + "</div>" +
       '<div class="row mb8">' + legend + '<span class="spacer"></span>' +
       '<button type="button" class="btn small' + (canEdit ? "" : " va-disabled") + '" data-act="rebuild-diagram">按关系表重建图示（演示）</button>' +
-      '<button type="button" class="btn small" data-act="zoom">缩放示意</button>' +
+      '<button type="button" class="btn small" data-act="zoom-out">缩小</button>' +
+      '<span class="va-zoom-label" data-slot="zoom-label">' + Math.round(S.zoom * 100) + "%</span>" +
+      '<button type="button" class="btn small" data-act="zoom-in">放大</button>' +
+      '<button type="button" class="btn small" data-act="zoom-reset">重置</button>' +
       '<button type="button" class="btn primary' + (canEdit ? "" : " va-disabled") + '" data-act="submit-diagram">提交仲裁员审查</button></div>' +
-      (dg ? '<div class="diagram' + (S.zoom ? " va-zoom" : "") + (canEdit ? "" : " va-disabled") + '" id="va-diagram"><div class="va-svg-host">' + svgFor(dg) + "</div></div>"
+      (dg ? '<div class="diagram' + (canEdit ? "" : " va-disabled") + '" id="va-diagram">' +
+        '<div class="va-viewport">' +
+        '<div class="va-pan" data-slot="pan" style="transform:translate(' + S.panX + 'px,' + S.panY + 'px) scale(' + S.zoom + ')">' +
+        '<div class="va-svg-host">' + svgFor(dg) + "</div></div></div></div>"
         : '<div class="empty">暂无图示数据</div>') +
-      '<div class="notice info mt12">命题节点以带框序号表示；命题类型仅存在于标注表/数据库，不进入图示（依《指南》6.1）。</div>';
+      '<div class="notice info mt12">命题节点以带框序号表示；命题类型仅存在于标注表/数据库，不进入图示（依《指南》6.1）。滚轮缩放、拖拽空白处平移、拖拽节点调整位置。</div>';
   }
 
   function nextRelId() {
@@ -2530,34 +2539,79 @@ window.APP = (function () {
       APP.ui.toast("已退出练习模式");
       return;
     }
-    if (name === "zoom") {
-      S.zoom = !S.zoom;
-      var d = hostRoot.querySelector("#va-diagram");
-      if (d) d.classList.toggle("va-zoom", S.zoom);
-      return;
-    }
+    if (name === "zoom-in") { zoomBy(1.25); return; }
+    if (name === "zoom-out") { zoomBy(1 / 1.25); return; }
+    if (name === "zoom-reset") { S.zoom = 1; S.panX = 0; S.panY = 0; applyView(); return; }
     if (name === "submit-diagram") { submitDiagram(); return; }
   }
 
+  function clampZoom(z) { return Math.max(0.4, Math.min(2.5, z)); }
+
+  function applyView() {
+    var pan = hostRoot.querySelector("#va-diagram .va-pan");
+    if (pan) pan.style.transform = "translate(" + S.panX + "px," + S.panY + "px) scale(" + S.zoom + ")";
+    var label = hostRoot.querySelector('[data-slot="zoom-label"]');
+    if (label) label.textContent = Math.round(S.zoom * 100) + "%";
+  }
+
+  function zoomBy(factor) {
+    S.zoom = clampZoom(S.zoom * factor);
+    applyView();
+  }
+
+  function onWheel(e) {
+    if (S.tab !== "diagram") return;
+    if (!e.target.closest || !e.target.closest("#va-diagram")) return;
+    var vp = hostRoot.querySelector("#va-diagram .va-viewport");
+    if (!vp) return;
+    e.preventDefault();
+    var rect = vp.getBoundingClientRect();
+    var cx = e.clientX - rect.left;
+    var cy = e.clientY - rect.top;
+    var prev = S.zoom;
+    var next = clampZoom(prev * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
+    if (next === prev) return;
+    S.panX = cx - (cx - S.panX) * (next / prev);
+    S.panY = cy - (cy - S.panY) * (next / prev);
+    S.zoom = next;
+    applyView();
+  }
+
   function onMouseDown(e) {
-    if (!canEdit) return;
     if (e.button !== 0 || S.tab !== "diagram") return;
     var g = e.target.closest ? e.target.closest(".node, .rel-node") : null;
-    if (!g) return;
-    var svg = hostRoot.querySelector("#va-diagram svg");
-    if (!svg) return;
+    if (g) {
+      if (!canEdit) return;
+      var svg = hostRoot.querySelector("#va-diagram svg");
+      if (!svg) return;
+      e.preventDefault();
+      dragState = {
+        mode: "node",
+        kind: g.getAttribute("data-kind"),
+        id: g.getAttribute("data-id"),
+        rect: svg.getBoundingClientRect()
+      };
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+      return;
+    }
+    var vp = e.target.closest ? e.target.closest("#va-diagram .va-viewport") : null;
+    if (!vp) return;
     e.preventDefault();
-    dragState = {
-      kind: g.getAttribute("data-kind"),
-      id: g.getAttribute("data-id"),
-      rect: svg.getBoundingClientRect()
-    };
+    if (vp.classList) vp.classList.add("grabbing");
+    dragState = { mode: "pan", startX: e.clientX, startY: e.clientY, baseX: S.panX, baseY: S.panY };
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   }
 
   function onMouseMove(e) {
     if (!dragState) return;
+    if (dragState.mode === "pan") {
+      S.panX = dragState.baseX + (e.clientX - dragState.startX);
+      S.panY = dragState.baseY + (e.clientY - dragState.startY);
+      applyView();
+      return;
+    }
     var dg = curDiagram();
     if (!dg) return;
     var scale = 800 / dragState.rect.width;
@@ -2580,6 +2634,8 @@ window.APP = (function () {
     dragState = null;
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
+    var vp = hostRoot.querySelector("#va-diagram .va-viewport");
+    if (vp && vp.classList) vp.classList.remove("grabbing");
   }
 
   function onMouseOver(e) {
@@ -2651,6 +2707,7 @@ window.APP = (function () {
     root.addEventListener("mousedown", onMouseDown);
     root.addEventListener("mouseover", onMouseOver);
     root.addEventListener("mouseout", onMouseOut);
+    root.addEventListener("wheel", onWheel, { passive: false });
   }
 
   APP.registerView("annotate", {
@@ -2678,11 +2735,13 @@ window.APP = (function () {
   var RO_NOTES = {
     annotator: "标注者可查看最终裁定结果并与自身标注比对（只读）；裁定操作请由仲裁员执行。",
     student: "学生为只读查看；请在教学展示中完成练习。",
-    teacher: "教师为只读查看。"
+    teacher: "教师为只读查看。",
+    expert: "领域专家：裁决核心概念分歧并更新疑难问题说明文档；逐项的认可/重标请由仲裁员执行。"
   };
-  var store = { filter: "全部", single: false, diffs: null, expert: [], docs: null, picked: "" };
+  var store = { filter: "全部", single: false, diffs: null, expert: [], docs: null, picked: "", viewAs: "A" };
   var host = null;
   var canAdj = false;
+  var canExpert = false;
 
   function nowStr() {
     var t = new Date();
@@ -2703,6 +2762,7 @@ window.APP = (function () {
   function kindCls(kind) { return KIND_CLS[kind] || "gray"; }
 
   function roOff() { return canAdj ? "" : ' aria-disabled="true"'; }
+  function roOffExpert() { return canExpert ? "" : ' aria-disabled="true"'; }
 
   function find(id) {
     return store.diffs.filter(function (d) { return d.id === id; })[0];
@@ -2814,8 +2874,38 @@ window.APP = (function () {
       '<div data-slot="docs">' + docsHTML() + "</div>" +
       '<h4 class="mt16">专家裁决记录</h4>' +
       '<div class="mb12" data-slot="expert">' + expertHTML() + "</div>" +
-      '<button type="button" class="btn primary" data-act="expert"' + roOff() + ">提交专家裁决</button>" +
+      '<button type="button" class="btn primary" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>" +
       "</div>";
+  }
+
+  function myCompareHTML() {
+    if (APP.role() !== "annotator") return "";
+    var asA = store.viewAs !== "B";
+    var rows = store.diffs.map(function (d) {
+      var mine = asA ? d.a : d.b;
+      var verdict = '<span class="tag gray">待裁定</span>';
+      if (d.result) {
+        var aligned;
+        if (/^认可\s*A/.test(d.result)) aligned = asA;
+        else if (/^认可\s*B/.test(d.result)) aligned = !asA;
+        else aligned = true;
+        verdict = aligned ? '<span class="tag green">与裁定一致</span>' : '<span class="tag amber">与裁定不同</span>';
+      }
+      return "<tr>" +
+        '<td><span class="code-chip">' + APP.esc(d.target) + "</span></td>" +
+        "<td>" + APP.esc(mine) + "</td>" +
+        "<td>" + (d.result ? APP.esc(d.result) : '<span class="muted">未裁定</span>') + "</td>" +
+        "<td>" + verdict + "</td></tr>";
+    }).join("");
+    return '<div class="card">' +
+      '<div class="row mb8"><h3 style="margin:0">我的标注结果与最终裁定比对</h3><span class="spacer"></span>' +
+      '<label class="small muted">以谁的视角 <select data-view-as style="width:auto;display:inline-block">' +
+      '<option value="A"' + (asA ? " selected" : "") + ">标注员A（刘标注）</option>" +
+      '<option value="B"' + (!asA ? " selected" : "") + ">标注员B（陈标注）</option>" +
+      "</select></label></div>" +
+      '<div class="small muted mb8">依《指南》8.2.4：标注者可查看最终裁定结果，并与自己的标注结果进行比对。</div>' +
+      '<table class="table"><thead><tr><th style="width:90px">差异点</th><th>我的标注</th><th>最终裁定</th><th style="width:120px">比对</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="4" class="muted">暂无差异项</td></tr>') + "</tbody></table></div>";
   }
 
   function paperHTML() {
@@ -2832,7 +2922,7 @@ window.APP = (function () {
   }
 
   function layoutHTML() {
-    var roTag = canAdj ? "" : '<span class="tag gray">只读模式</span>';
+    var roTag = (canAdj || canExpert) ? "" : '<span class="tag gray">只读模式</span>';
     var roNote = canAdj ? "" : '<div class="notice mt12">' + APP.esc(RO_NOTES[APP.role()] || "当前角色为只读查看。") + "</div>";
     return '<div class="page">' +
       '<div class="page-head"><div><h2>裁定工作台</h2><div class="sub">双人独立标注结果比对：自动/半自动比对，人工裁定（依《指南》8.2.4）</div></div>' +
@@ -2849,13 +2939,14 @@ window.APP = (function () {
       '<span class="spacer"></span>' +
       '<span class="small muted" data-slot="count">' + countText() + "</span>" +
       '<button type="button" class="btn' + (store.single ? " toggled" : "") + '" data-act="single">单版本模式</button>' +
-      '<button type="button" class="btn" data-act="expert"' + roOff() + ">提交专家裁决</button>" +
+      '<button type="button" class="btn" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>" +
       '<button type="button" class="btn primary" data-act="finish"' + roOff() + ">完成裁定</button>" +
       "</div>" +
       '<div class="adj-layout">' +
       paperHTML() +
       '<div class="adj-main">' +
       '<div class="adj-list' + (store.single ? " adj-single" : "") + '">' + listHTML() + "</div>" +
+      '<div data-slot="mycompare">' + myCompareHTML() + "</div>" +
       sidebarHTML() +
       "</div>" +
       "</div>" +
@@ -2993,6 +3084,11 @@ window.APP = (function () {
       var btn = e.target.closest("[data-act]");
       if (!btn) return;
       var act = btn.getAttribute("data-act");
+      if (act === "expert") {
+        if (!canExpert) { APP.ui.toast("只读模式：当前角色不能提交专家裁决", "warn"); return; }
+        expertModal();
+        return;
+      }
       if (!canAdj && act !== "filter" && act !== "single") {
         APP.ui.toast("只读模式：当前角色不能执行裁定操作", "warn");
         return;
@@ -3013,7 +3109,6 @@ window.APP = (function () {
         paintList();
         return;
       }
-      if (act === "expert") { expertModal(); return; }
       if (act === "finish") { finish(); return; }
       var d = find(btn.getAttribute("data-id"));
       if (!d) return;
@@ -3022,12 +3117,20 @@ window.APP = (function () {
       if (act === "rebook" || act === "revise") rebook(d);
       if (act === "confirm") resolve(d, "确认通过（单版本）");
     });
+    root.addEventListener("change", function (e) {
+      var sel = e.target && e.target.closest ? e.target.closest("[data-view-as]") : null;
+      if (!sel) return;
+      store.viewAs = sel.value === "B" ? "B" : "A";
+      var el = host.querySelector('[data-slot="mycompare"]');
+      if (el) el.innerHTML = myCompareHTML();
+    });
   }
 
   APP.registerView("adjudicate", {
     title: "裁定工作台",
     render: function (root) {
-      canAdj = ["adjudicator", "expert", "admin"].indexOf(APP.role()) !== -1;
+      canAdj = ["adjudicator", "admin"].indexOf(APP.role()) !== -1;
+      canExpert = ["expert", "admin"].indexOf(APP.role()) !== -1;
       host = root;
       ensure();
       APP.ui.addStyle("view-adjudicate",
