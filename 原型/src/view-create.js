@@ -175,6 +175,7 @@
       var doc = APP.data.doc;
       var guide = APP.data.guide;
       var role = APP.role();
+      var isAdmin = role === "admin";
       var taskType = role === "teacher" ? "教学练习" : "科研标注";
       var selectedVersion = null;
       var step = 1;
@@ -226,8 +227,8 @@
       }
 
       function pageSubtitle() {
-        if (role === "teacher") return "教师创建教学练习任务：标注者默认包含学生，仲裁员默认为教师。";
-        if (role === "admin") return "管理员创建科研标注任务：每份文书双人独立标注，并指定仲裁员。";
+        if (role === "teacher") return "教师创建教学练习任务：标注者默认包含学生，仲裁员默认为教师；标注指南由管理员导入，教师仅可从已有版本中选择。";
+        if (role === "admin") return "管理员创建科研标注任务：每份文书双人独立标注，并指定仲裁员；可导入并登记标注指南。";
         return "向导共 5 步：上传文书 → 确定标注范围 → 案例信息 → 导入指南 → 分配人员。当前角色：" + APP.roleName();
       }
 
@@ -259,11 +260,15 @@
         render();
       }
 
+      function stepName(i) {
+        return (i === 3 && !isAdmin) ? "选择指南版本" : STEP_NAMES[i];
+      }
+
       function stepbarHtml() {
         return STEP_NAMES.map(function (name, i) {
           var n = i + 1;
           var cls = n === step ? " active" : (n < step ? " done" : "");
-          return '<div class="step' + cls + '"><span class="num">' + (n < step ? "✓" : n) + "</span>" + name + "</div>";
+          return '<div class="step' + cls + '"><span class="num">' + (n < step ? "✓" : n) + "</span>" + stepName(i) + "</div>";
         }).join("");
       }
 
@@ -273,7 +278,7 @@
           ? '<button type="button" class="btn primary" data-nav="create">创建任务</button>'
           : '<button type="button" class="btn primary" data-nav="next">下一步</button>';
         return prev +
-          '<span class="create-step-hint">第 ' + step + " 步 / 共 " + STEP_NAMES.length + " 步 · " + STEP_NAMES[step - 1] + "</span>" +
+          '<span class="create-step-hint">第 ' + step + " 步 / 共 " + STEP_NAMES.length + " 步 · " + stepName(step - 1) + "</span>" +
           '<span class="spacer"></span>' + next;
       }
 
@@ -340,26 +345,32 @@
       function step4Html() {
         var html = '<div class="card mb12">' +
           '<div class="row"><div><h3 style="margin:0">指南文件</h3><div class="small muted mt8">系统当前版本：<span class="code-chip">' + APP.esc(guide.version) + "</span>（" + APP.esc(guide.importedAt) + "）</div></div>" +
-          '<span class="spacer"></span><button type="button" class="btn primary" data-pick-guide>选择指南文件</button></div>';
-        if (guideImported) {
+          '<span class="spacer"></span>' +
+          (isAdmin ? '<button type="button" class="btn primary" data-pick-guide>选择指南文件</button>' : '<span class="tag gray">仅管理员可导入指南</span>') +
+          "</div>";
+        if (isAdmin && guideImported) {
           html += '<div class="small mt12">已选文件：<span class="code-chip">' + APP.esc(guide.file) + "</span></div>";
-        } else {
+        } else if (isAdmin) {
           html += '<div class="notice info mt12">选择《指南》文件后，系统将解析出非命题要素、命题要素与关系类型，供标注时使用。</div>';
+        } else {
+          html += '<div class="notice info mt12">标注指南由管理员统一导入与登记（用例 B4/B5）。本步你只需在下方「任务使用的指南版本」中选择已有版本即可（用例 B7）。</div>';
         }
         html += "</div>";
-        if (guideImported) {
+        if (isAdmin && guideImported) {
           html += '<div class="card mb12"><div class="row mb12"><h3 style="margin:0">解析结果</h3><span class="spacer"></span><span class="small muted">可删除条目或追加新条目（演示）</span></div>' +
             '<div class="guide-groups">' +
             GUIDE_GROUPS.map(function (g) { return guideGroupHtml(g.key, g.title, parsed[g.key]); }).join("") +
             "</div></div>";
         }
         html += '<div class="grid cols-2">' +
-          '<div class="card"><h3>登记版本</h3>' +
-          '<div class="form-row"><label>版本号</label><input type="text" data-ver="version" value="' + APP.esc(guide.version) + '"></div>' +
-          '<div class="form-row"><label>适用范围</label><input type="text" data-ver="scope" value="' + APP.esc(guide.scope) + '"></div>' +
-          '<div class="form-row"><label>操作人</label><input type="text" data-ver="operator" value="' + APP.esc(guide.operator) + '"></div>' +
-          '<div class="form-row"><label>说明</label><textarea rows="2" data-ver="note" placeholder="本次指南的主要变化…"></textarea></div>' +
-          '<button type="button" class="btn primary" data-register>登记版本</button></div>' +
+          (isAdmin
+            ? '<div class="card"><h3>登记版本</h3>' +
+              '<div class="form-row"><label>版本号</label><input type="text" data-ver="version" value="' + APP.esc(guide.version) + '"></div>' +
+              '<div class="form-row"><label>适用范围</label><input type="text" data-ver="scope" value="' + APP.esc(guide.scope) + '"></div>' +
+              '<div class="form-row"><label>操作人</label><input type="text" data-ver="operator" value="' + APP.esc(guide.operator) + '"></div>' +
+              '<div class="form-row"><label>说明</label><textarea rows="2" data-ver="note" placeholder="本次指南的主要变化…"></textarea></div>' +
+              '<button type="button" class="btn primary" data-register>登记版本</button></div>'
+            : '<div class="card"><h3>登记版本</h3><div class="notice">仅管理员可导入与登记标注指南；如需使用新指南，请联系管理员导入后再选择。</div></div>') +
           '<div class="card"><h3>版本历史</h3><div data-guide-history>' + historyHtml(history) + "</div></div>" +
           "</div>";
         html += '<div class="card mt12" data-version-card>' + versionPickHtml() + "</div>";
@@ -600,6 +611,10 @@
         if (t.closest("[data-adjust]")) { APP.ui.pending("手动拖动调整提取范围"); return; }
 
         if (t.closest("[data-pick-guide]")) {
+          if (!isAdmin) {
+            APP.ui.toast("仅管理员可导入标注指南，请从已有版本中选择", "warn");
+            return;
+          }
           guideImported = true;
           APP.ui.toast("已选择指南文件：" + guide.file);
           render();
@@ -608,6 +623,10 @@
 
         var del = t.closest("[data-del-guide]");
         if (del) {
+          if (!isAdmin) {
+            APP.ui.toast("仅管理员可维护指南解析结果", "warn");
+            return;
+          }
           var g1 = del.getAttribute("data-del-guide");
           var i1 = Number(del.getAttribute("data-idx"));
           if (parsed[g1] && parsed[g1][i1] != null) {
@@ -620,6 +639,10 @@
 
         var add = t.closest("[data-add-item]");
         if (add) {
+          if (!isAdmin) {
+            APP.ui.toast("仅管理员可维护指南解析结果", "warn");
+            return;
+          }
           var g2 = add.getAttribute("data-add-item");
           var input = contentEl.querySelector('[data-add-input="' + g2 + '"]');
           var val = input ? input.value.trim() : "";
@@ -635,6 +658,10 @@
         }
 
         if (t.closest("[data-register]")) {
+          if (!isAdmin) {
+            APP.ui.toast("仅管理员可登记标注指南版本", "warn");
+            return;
+          }
           var version = readVer("version") || guide.version;
           var operator = readVer("operator") || APP.roleName();
           var scope = readVer("scope") || "全部任务";
