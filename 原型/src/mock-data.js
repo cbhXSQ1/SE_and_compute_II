@@ -185,6 +185,9 @@ window.MOCK = {
   adjudication: {
     versionA: "标注员A（刘标注）",
     versionB: "标注员B（陈标注）",
+    expertRequests: [
+      { id: "E1", time: "2026-09-22 09:30", user: "王仲裁", text: "P4 应标为 SM 还是 SF？涉及《指南》4.2 个别规范判断的标志词认定，请领域专家裁决。", resolved: false }
+    ],
     diffs: [
       { id: "d1", kind: "标签选择", target: "P4", desc: "P4 的要素类型不一致", a: "SM", b: "SF", resolved: false },
       { id: "d2", kind: "标注边界", target: "P7-P8", desc: "切割范围不一致：A 合并为一个要素，B 分为两个要素", a: "合并（1 个要素）", b: "拆分（2 个要素）", resolved: false },

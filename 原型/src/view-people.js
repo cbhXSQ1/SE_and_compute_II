@@ -6,6 +6,54 @@
     "学生": "amber"
   };
 
+  var ROLE_CONFLICTS = [["教师", "学生"]];
+
+  function conflictPairOf(picked) {
+    for (var i = 0; i < ROLE_CONFLICTS.length; i++) {
+      var pair = ROLE_CONFLICTS[i];
+      var all = true;
+      for (var j = 0; j < pair.length; j++) {
+        if (picked.indexOf(pair[j]) === -1) { all = false; break; }
+      }
+      if (all) return pair;
+    }
+    return null;
+  }
+
+  function conflictMessage(pair) {
+    return "角色冲突：" + pair.join("与") + "不能同时授予";
+  }
+
+  function bindRoleConflicts() {
+    var root = document.getElementById("modal-root");
+    if (!root) return;
+    var boxes = root.querySelectorAll("[data-role-pick]");
+    if (!boxes.length) return;
+    function sync() {
+      var picked = [];
+      Array.prototype.forEach.call(boxes, function (b) {
+        if (b.checked) picked.push(b.value);
+      });
+      Array.prototype.forEach.call(boxes, function (b) {
+        var blocked = false;
+        for (var i = 0; i < ROLE_CONFLICTS.length; i++) {
+          var pair = ROLE_CONFLICTS[i];
+          if (pair.indexOf(b.value) === -1) continue;
+          for (var j = 0; j < pair.length; j++) {
+            if (pair[j] !== b.value && picked.indexOf(pair[j]) !== -1 && !b.checked) blocked = true;
+          }
+        }
+        b.disabled = blocked;
+        var label = b.closest("label");
+        if (label) label.classList.toggle("muted", blocked);
+      });
+    }
+    Array.prototype.forEach.call(boxes, function (b) {
+      b.addEventListener("change", sync);
+    });
+    sync();
+  }
+
   function rolesOf(user) {
     if (user.roles && user.roles.length) return user.roles.slice();
     return user.role ? [user.role] : [];
@@ -29,10 +77,10 @@
     }).join(" ");
   }
 
-  function checklistHtml(catalog, checked) {
+  function checklistHtml(catalog, checked, rolePick) {
     return catalog.map(function (v) {
       var on = checked.indexOf(v) !== -1;
-      return '<label class="checkbox"><input type="checkbox" data-pick value="' + APP.esc(v) + '"' + (on ? " checked" : "") + ">" +
+      return '<label class="checkbox"><input type="checkbox" data-pick' + (rolePick ? " data-role-pick" : "") + ' value="' + APP.esc(v) + '"' + (on ? " checked" : "") + ">" +
         "<span>" + APP.esc(v) + "</span></label>";
     }).join("");
   }
@@ -91,7 +139,7 @@
       tableHtml(users, manage) +
       '<div class="notice ' + (manage ? "info" : "") + ' mt16">' +
       (manage
-        ? "一人可拥有多个角色；学生泛化自标注员（练习中复用标注功能）。特权用于授予非管理员上传数据、创建任务等能力（对应用例 A1 维护用户与角色 / A2 授予特权）。"
+        ? "一人可拥有多个角色；学生泛化自标注员（练习中复用标注功能）。特权用于授予非管理员上传数据、创建任务等能力（对应用例 A1 维护用户与角色 / A2 授予特权）。角色冲突规则：教师与学生互斥（不能同时拥有）。"
         : "人员管理仅管理员可操作；当前角色为只读查看。") +
       "</div>" +
       "</div>";
@@ -134,7 +182,7 @@
         APP.ui.modal({
           title: "编辑角色 · " + user.name,
           body: '<p class="muted small">一人可拥有多个角色；保存后同步角色字段（roles[0]）。</p>' +
-            '<div class="form-row"><label>角色（可多选）</label>' + checklistHtml(roleCatalog, current) + "</div>",
+            '<div class="form-row"><label>角色（可多选）</label>' + checklistHtml(roleCatalog, current, true) + "</div>",
           actions: [
             { label: "取消" },
             {
@@ -142,6 +190,11 @@
                 var list = orderRoles(pickedValues(), current);
                 if (!list.length) {
                   APP.ui.toast("请至少选择一个角色", "warn");
+                  return false;
+                }
+                var pair = conflictPairOf(list);
+                if (pair) {
+                  APP.ui.toast(conflictMessage(pair) + "（" + user.name + "）", "warn");
                   return false;
                 }
                 user.roles = list;
@@ -153,6 +206,7 @@
             }
           ]
         });
+        bindRoleConflicts();
       }
 
       function grantPrivs(user) {
@@ -190,7 +244,7 @@
         APP.ui.modal({
           title: "新增用户",
           body: '<div class="form-row"><label>姓名</label><input type="text" data-name placeholder="请输入姓名"></div>' +
-            '<div class="form-row"><label>角色（可多选）</label>' + checklistHtml(roleCatalog, ["标注员"]) + "</div>",
+            '<div class="form-row"><label>角色（可多选）</label>' + checklistHtml(roleCatalog, ["标注员"], true) + "</div>",
           actions: [
             { label: "取消" },
             {
@@ -206,6 +260,11 @@
                   APP.ui.toast("请至少选择一个角色", "warn");
                   return false;
                 }
+                var pair = conflictPairOf(list);
+                if (pair) {
+                  APP.ui.toast(conflictMessage(pair) + "（" + name + "）", "warn");
+                  return false;
+                }
                 users.push({ id: nextId(), name: name, role: list[0], roles: list, privileges: [] });
                 writeBack();
                 paint();
@@ -214,6 +273,7 @@
             }
           ]
         });
+        bindRoleConflicts();
       }
 
       root.addEventListener("click", function (e) {

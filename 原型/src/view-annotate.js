@@ -1207,24 +1207,70 @@
     });
   }
 
+  function stripDiagramNode(dg, delId) {
+    var nodes = (dg.nodes || []).filter(function (n) { return n.id !== delId; });
+    var edges = (dg.edges || []).filter(function (e) { return e.from !== delId && e.to !== delId; });
+    var connected = {};
+    edges.forEach(function (e) { connected[e.from] = true; connected[e.to] = true; });
+    var relNodes = (dg.relNodes || []).filter(function (n) { return connected[n.id]; });
+    var copy = {};
+    Object.keys(dg).forEach(function (k) {
+      if (k !== "nodes" && k !== "edges" && k !== "relNodes") copy[k] = dg[k];
+    });
+    copy.nodes = nodes;
+    copy.edges = edges;
+    copy.relNodes = relNodes;
+    return copy;
+  }
+
   function deleteElem() {
     var s = segById(S.picked);
     if (!s) {
       APP.ui.toast("请先选择要删除的要素", "warn");
       return;
     }
+    var segments0 = APP.store.get("segments");
+    var relations0 = APP.store.get("relations");
     var res = APP.annotateLogic.computeDeletion({
-      segments: APP.store.get("segments"),
-      relations: APP.store.get("relations"),
+      segments: segments0,
+      relations: relations0,
       diagrams: APP.store.get("diagrams")
     }, s.id);
+    if (!res) {
+      APP.ui.toast("请先选择要删除的要素", "warn");
+      return;
+    }
 
-    var n = APP.store.get("segments").length;
-    var num = parseInt(s.id.slice(1), 10);
-    var body = "<p>删除要素 <b>" + APP.esc(s.id) + "</b> 后，后续要素将按原文顺序自动重编号" +
-      (num < n ? "（P" + (num + 1) + "–P" + n + " → P" + num + "–P" + (n - 1) + "）" : "") + "。</p>";
+    var removedIds = {};
+    res.removed.forEach(function (r) { removedIds[r.id] = true; });
 
-    if (res.removed.length || res.modified.length) {
+    var newSegments = segments0.map(function (x) {
+      var copy = {};
+      Object.keys(x).forEach(function (k) { copy[k] = x[k]; });
+      if (x.id === s.id) copy.type = "";
+      return copy;
+    });
+
+    var grown = [];
+    relations0.forEach(function (r) {
+      if (removedIds[r.id]) return;
+      var copy = {};
+      Object.keys(r).forEach(function (k) { copy[k] = r[k]; });
+      copy.members = r.members.filter(function (m) { return m !== s.id; });
+      grown.push({ rel: copy, before: r.formal });
+    });
+    var liveRelations = grown.map(function (g) { return g.rel; });
+    grown.forEach(function (g) { g.rel.formal = APP.annotateLogic.expandFormal(g.rel, liveRelations); });
+    var modified = [];
+    grown.forEach(function (g) {
+      if (g.before !== g.rel.formal) modified.push({ id: g.rel.id, before: g.before, after: g.rel.formal });
+    });
+
+    var newDiagrams = APP.store.get("diagrams").map(function (dg) { return stripDiagramNode(dg, s.id); });
+
+    var body = "<p>删除要素 <b>" + APP.esc(s.id) + "</b> 的标注后，<b>原文保留</b>为未标注文本，编号 " +
+      APP.esc(s.id) + " 不变，可重新标注。</p>";
+    if (res.removed.length || modified.length) {
       body += '<div class="notice info small mt12"><b>对已建立关系的影响：</b></div>';
       if (res.removed.length) {
         body += '<div class="small mt8">以下关系将一并删除：</div><ul class="small mt4">' +
@@ -1233,9 +1279,9 @@
               '<span class="muted"> — ' + APP.esc(r.reason) + "</span></li>";
           }).join("") + "</ul>";
       }
-      if (res.modified.length) {
-        body += '<div class="small mt8">以下关系的成员编号将同步更新：</div><ul class="small mt4">' +
-          res.modified.map(function (r) {
+      if (modified.length) {
+        body += '<div class="small mt8">以下关系的成员将移除该要素：</div><ul class="small mt4">' +
+          modified.map(function (r) {
             return "<li><span class='code-chip'>" + APP.esc(r.id) + "</span> " +
               APP.esc(r.before) + " → <b>" + APP.esc(r.after) + "</b></li>";
           }).join("") + "</ul>";
@@ -1246,27 +1292,21 @@
     body += '<p class="small muted mt8">论证图示中该命题节点及相关连线将同步移除。</p>';
 
     APP.ui.modal({
-      title: "删除要素 " + s.id,
+      title: "删除要素标注 " + s.id,
       body: body,
       actions: [
         { label: "取消" },
         {
           label: "确认删除", kind: "primary", onClick: function () {
             APP.store.patch({
-              segments: res.segments,
-              relations: res.relations,
-              diagrams: res.diagrams
+              segments: newSegments,
+              relations: liveRelations,
+              diagrams: newDiagrams
             });
             S.picked = "";
-            var removedIds = {};
-            res.removed.forEach(function (r) { removedIds[r.id] = true; });
-            S.relPicked = S.relPicked.filter(function (id) {
-              return id !== s.id && !removedIds[id];
-            }).map(function (id) {
-              return id.charAt(0) === "P" && res.pmap[id] ? res.pmap[id] : id;
-            });
+            S.relPicked = S.relPicked.filter(function (id) { return id !== s.id; });
             paint();
-            var msg = "已删除 " + s.id + "，后续要素已重编号";
+            var msg = "已删除要素标注，原文保留（可重新标注）";
             APP.ui.toast(res.removed.length ? msg + "；" + res.removed.length + " 条关系已一并删除" : msg, res.removed.length ? "warn" : "ok");
           }
         }

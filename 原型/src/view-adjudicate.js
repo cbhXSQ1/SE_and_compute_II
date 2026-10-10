@@ -10,12 +10,13 @@
     annotator: "标注者可查看最终裁定结果并与自身标注比对（只读）；裁定操作请由仲裁员执行。",
     student: "学生为只读查看；请在教学展示中完成练习。",
     teacher: "教师为只读查看。",
-    expert: "领域专家：裁决核心概念分歧并更新疑难问题说明文档；逐项的认可/重标请由仲裁员执行。"
+    expert: "领域专家：请在右侧「专家裁决记录」中对提交的分歧逐条裁决，结论会同步写入疑难问题说明文档；逐项的认可/重标由仲裁员执行。"
   };
   var store = { filter: "全部", single: false, diffs: null, expert: [], docs: null, picked: "", viewAs: "A" };
   var host = null;
   var canAdj = false;
   var canExpert = false;
+  var canVerdict = false;
 
   function nowStr() {
     var t = new Date();
@@ -25,6 +26,12 @@
 
   function ensure() {
     if (!store.docs) store.docs = DOC_RECORDS.slice();
+    if (!store.expert.length) {
+      var seeds = (APP.data.adjudication && APP.data.adjudication.expertRequests) || [];
+      store.expert = seeds.map(function (r) {
+        return { id: r.id, time: r.time, user: r.user, text: r.text, resolved: !!r.resolved, verdict: r.verdict || "" };
+      });
+    }
     if (store.diffs) return;
     var src = (APP.data.adjudication && APP.data.adjudication.diffs) || [];
     store.diffs = src.map(function (d) {
@@ -40,6 +47,40 @@
 
   function find(id) {
     return store.diffs.filter(function (d) { return d.id === id; })[0];
+  }
+
+  function findById(arr, id) {
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i].id === id) return arr[i];
+    }
+    return null;
+  }
+
+  function taskOptions() {
+    var tasks = (APP.data && APP.data.tasks) || [];
+    var vis;
+    try {
+      vis = (APP.annotateLogic && APP.annotateLogic.visibleTasks)
+        ? APP.annotateLogic.visibleTasks(tasks, APP.currentUser()) : tasks;
+    } catch (e) { vis = null; }
+    if (!vis || !vis.length) vis = tasks;
+    return vis;
+  }
+
+  function docOptions() {
+    var docs = APP.data && APP.data.documents;
+    if (docs && docs.length) return docs;
+    return [(APP.data && APP.data.doc) || { id: "D1", title: "文书一" }];
+  }
+
+  function currentTask() {
+    var arr = taskOptions();
+    return findById(arr, APP.state.currentTaskId) || arr[0] || null;
+  }
+
+  function currentDoc() {
+    var arr = docOptions();
+    return findById(arr, APP.state.currentDocId) || arr[0] || null;
   }
 
   function visibleDiffs() {
@@ -92,7 +133,10 @@
   }
 
   function actionsHTML(d) {
-    var dis = d.resolved ? " disabled" : roOff();
+    if (d.resolved) {
+      return '<button type="button" class="btn small ghost" data-act="withdraw" data-id="' + d.id + '"' + roOff() + ">撤回</button>";
+    }
+    var dis = roOff();
     if (store.single) {
       return '<button type="button" class="btn small primary" data-act="confirm" data-id="' + d.id + '"' + dis + ">确认通过</button>" +
         '<button type="button" class="btn small ghost" data-act="revise" data-id="' + d.id + '"' + dis + ">修订标注</button>";
@@ -126,14 +170,43 @@
     return arr.map(cardHTML).join("");
   }
 
-  function recordHTML(r) {
-    return '<div class="list-item"><div class="txt wrap"><b>' + APP.esc(r.user) + '</b> <span class="small muted">' +
-      APP.esc(r.time) + "</span><br>" + APP.esc(r.text) + "</div></div>";
+  function recordHTML(r, withVerdict) {
+    var head = "<b>" + APP.esc(r.user) + '</b> <span class="small muted">' + APP.esc(r.time) + "</span>";
+    if (r.id) {
+      if (r.resolved) head += ' <span class="tag green">已裁决</span>';
+      else head += ' <span class="tag amber">待裁决</span>';
+    }
+    var verdict = r.verdict ? '<div class="small mt8">裁决结论：' + APP.esc(r.verdict) + "</div>" : "";
+    var actions = (withVerdict && r.id && !r.resolved)
+      ? '<div class="row mt8"><button type="button" class="btn small primary" data-act="expert-verdict" data-id="' + APP.esc(r.id) + '">裁决</button></div>'
+      : "";
+    return '<div class="list-item"><div class="txt wrap">' + head + "<br>" + APP.esc(r.text) + verdict + actions + "</div></div>";
+  }
+
+  function pendingExpertCount() {
+    return store.expert.filter(function (r) { return !r.resolved; }).length;
+  }
+
+  function currentPendingExpert() {
+    var tid = APP.state.currentTaskId;
+    var did = APP.state.currentDocId;
+    return store.expert.filter(function (r) {
+      return !r.resolved && r.taskId === tid && r.docId === did;
+    })[0] || null;
+  }
+
+  function expertSubmitBtnHTML() {
+    var role = APP.role();
+    if (role === "annotator" || role === "expert") return "";
+    if (currentPendingExpert()) {
+      return '<button type="button" class="btn" data-act="expert" aria-disabled="true">已提交专家裁决（等待处理）</button>';
+    }
+    return '<button type="button" class="btn primary" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>";
   }
 
   function expertHTML() {
     if (!store.expert.length) return '<div class="small muted">暂无专家裁决记录</div>';
-    return '<div class="list">' + store.expert.map(recordHTML).join("") + "</div>";
+    return '<div class="list">' + store.expert.map(function (r) { return recordHTML(r, canVerdict); }).join("") + "</div>";
   }
 
   function docsHTML() {
@@ -146,9 +219,9 @@
       "<h3>疑难问题说明文档（示意）</h3>" +
       '<div class="small muted mb12">依据《指南》8.2.4：分歧经领域专家裁决后，结论同步写入说明文档。</div>' +
       '<div data-slot="docs">' + docsHTML() + "</div>" +
-      '<h4 class="mt16">专家裁决记录</h4>' +
+      '<h4 class="mt16">专家裁决记录<span data-slot="expert-badge">' + (pendingExpertCount() ? ' <span class="tag amber">待裁决 ' + pendingExpertCount() + "</span>" : "") + "</span></h4>" +
       '<div class="mb12" data-slot="expert">' + expertHTML() + "</div>" +
-      (APP.role() === "annotator" ? "" : '<button type="button" class="btn primary" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>") +
+      '<span data-slot="expert-submit">' + expertSubmitBtnHTML() + "</span>" +
       "</div>";
   }
 
@@ -195,19 +268,52 @@
       "</div>";
   }
 
+  function switchersHTML() {
+    var tasks = taskOptions();
+    var tid = (currentTask() || {}).id || "";
+    var taskSel = '<select data-task-switch style="width:auto;max-width:280px">' +
+      tasks.map(function (t) {
+        return '<option value="' + APP.esc(t.id) + '"' + (t.id === tid ? " selected" : "") + ">" +
+          APP.esc(t.id + " · " + (t.name || "")) + "</option>";
+      }).join("") + "</select>";
+    var docs = docOptions();
+    var did = (currentDoc() || {}).id || "";
+    var docSel = '<select data-doc-switch style="width:auto;max-width:320px">' +
+      docs.map(function (d) {
+        return '<option value="' + APP.esc(d.id) + '"' + (d.id === did ? " selected" : "") + ">" +
+          APP.esc(d.title || d.id) + "</option>";
+      }).join("") + "</select>";
+    return '<div class="toolbar">' +
+      '<label class="small muted">任务 ' + taskSel + "</label>" +
+      '<label class="small muted">文书 ' + docSel + "</label>" +
+      '<span class="small muted">演示：差异数据以文书一为例</span>' +
+      "</div>";
+  }
+
   function layoutHTML() {
     var compareView = APP.role() === "annotator";
-    var roTag = (canAdj || canExpert) ? "" : '<span class="tag gray">只读模式</span>';
-    var roNote = canAdj ? "" : '<div class="notice mt12">' + APP.esc(RO_NOTES[APP.role()] || "当前角色为只读查看。") + "</div>";
+    var roTag = (canAdj || canExpert || canVerdict) ? "" : '<span class="tag gray">只读模式</span>';
+    var roNote = (!canAdj && !canVerdict)
+      ? '<div class="notice mt12">' + APP.esc(RO_NOTES[APP.role()] || "当前角色为只读查看。") + "</div>"
+      : (APP.role() === "expert" ? '<div class="notice info mt12">' + APP.esc(RO_NOTES.expert) + "</div>" : "");
+    var task = currentTask();
+    var doc = currentDoc();
+    var sub = compareView ? "查看最终裁定结果，并与自己的标注结果进行比对（只读）" : "双人独立标注结果比对：自动/半自动比对，人工裁定（依《指南》8.2.4）";
+    var curBits = [];
+    if (task) curBits.push("任务 " + APP.esc(task.id + " · " + (task.name || "")));
+    if (doc) curBits.push("文书《" + APP.esc(doc.title || doc.id) + "》");
+    if (curBits.length) sub += " 当前：" + curBits.join(" / ");
     return '<div class="page">' +
       '<div class="page-head"><div><h2>' + (compareView ? "比对结果" : "裁定工作台") + '</h2><div class="sub">' +
-      (compareView ? "查看最终裁定结果，并与自己的标注结果进行比对（只读）" : "双人独立标注结果比对：自动/半自动比对，人工裁定（依《指南》8.2.4）") + "</div></div>" +
+      sub + "</div></div>" +
       '<span class="spacer"></span>' +
       '<span class="tag gray">指南 ' + APP.esc((APP.data.guide && APP.data.guide.version) || "v1.2") + "</span>" +
-      '<span class="tag gray">文书 ' + APP.esc((APP.data.doc && APP.data.doc.id) || "D1") + "</span>" +
+      (task ? '<span class="tag gray">任务 ' + APP.esc(task.id) + "</span>" : "") +
+      '<span class="tag gray">文书 ' + APP.esc(doc ? doc.id : "D1") + "</span>" +
       roTag +
       "</div>" +
       roNote +
+      switchersHTML() +
       '<div class="toolbar adj-toolbar">' +
       '<div class="tabs">' + FILTERS.map(function (f) {
         return '<button type="button" class="' + (store.filter === f ? "active" : "") + '" data-act="filter" data-f="' + f + '">' + f + "</button>";
@@ -216,7 +322,6 @@
       '<span class="small muted" data-slot="count">' + countText() + "</span>" +
       '<button type="button" class="btn' + (store.single ? " toggled" : "") + '" data-act="single">单版本模式</button>' +
       (compareView ? "" :
-        '<button type="button" class="btn" data-act="expert"' + roOffExpert() + ">提交专家裁决</button>" +
         '<button type="button" class="btn primary" data-act="finish"' + roOff() + ">完成裁定</button>") +
       "</div>" +
       '<div class="adj-layout">' +
@@ -252,6 +357,10 @@
     if (docs) docs.innerHTML = docsHTML();
     var el = host.querySelector('[data-slot="expert"]');
     if (el) el.innerHTML = expertHTML();
+    var badge = host.querySelector('[data-slot="expert-badge"]');
+    if (badge) badge.innerHTML = pendingExpertCount() ? ' <span class="tag amber">待裁决 ' + pendingExpertCount() + "</span>" : "";
+    var submit = host.querySelector('[data-slot="expert-submit"]');
+    if (submit) submit.innerHTML = expertSubmitBtnHTML();
   }
 
   function paintPick() {
@@ -284,6 +393,25 @@
     d.result = note;
     paintList();
     APP.ui.toast("已裁定：" + d.target, "ok");
+  }
+
+  function withdraw(d) {
+    d.resolved = false;
+    d.result = "";
+    paintList();
+    APP.ui.toast("已撤回裁定：" + d.target, "warn");
+  }
+
+  function switchTask(id) {
+    if (!id || id === APP.state.currentTaskId) return;
+    APP.state.currentTaskId = id;
+    APP.goto("adjudicate", {}, true);
+  }
+
+  function switchDoc(id) {
+    if (!id || id === APP.state.currentDocId) return;
+    APP.state.currentDocId = id;
+    APP.goto("adjudicate", {}, true);
   }
 
   function rebook(d) {
@@ -323,15 +451,54 @@
               APP.ui.toast("请填写分歧说明", "warn");
               return false;
             }
-            var rec = { time: nowStr(), user: APP.roleName(), text: v };
+            var rec = { id: nextExpertId(), time: nowStr(), user: APP.roleName(), text: v, resolved: false, verdict: "",
+              taskId: APP.state.currentTaskId, docId: APP.state.currentDocId };
             store.expert.unshift(rec);
+            paintSidebar();
+            APP.ui.toast("已提交领域专家裁决，等待领域专家处理");
+          }
+        }
+      ]
+    });
+  }
+
+  function nextExpertId() {
+    var max = 0;
+    store.expert.forEach(function (r) {
+      var m = /^E(\d+)$/.exec(r.id || "");
+      if (m) max = Math.max(max, Number(m[1]));
+    });
+    return "E" + (max + 1);
+  }
+
+  function findExpert(id) {
+    return store.expert.filter(function (r) { return r.id === id; })[0] || null;
+  }
+
+  function expertVerdictModal(rec) {
+    APP.ui.modal({
+      title: "专家裁决 · " + rec.id,
+      body: '<p class="muted small">' + APP.esc(rec.text) + "</p>" +
+        '<div class="form-row"><label>裁决结论</label><textarea id="adj-verdict-input" placeholder="填写裁决结论与依据…"></textarea></div>',
+      actions: [
+        { label: "取消" },
+        {
+          label: "提交裁决", kind: "primary", onClick: function () {
+            var el = document.getElementById("adj-verdict-input");
+            var v = el ? el.value.trim() : "";
+            if (!v) {
+              APP.ui.toast("请填写裁决结论", "warn");
+              return false;
+            }
+            rec.resolved = true;
+            rec.verdict = v;
             store.docs.unshift({
-              time: rec.time,
-              user: rec.user,
-              text: "专家裁决：" + (v.length > 60 ? v.slice(0, 60) + "…" : v)
+              time: nowStr(),
+              user: APP.roleName(),
+              text: "专家裁决（" + rec.id + "）：" + (v.length > 60 ? v.slice(0, 60) + "…" : v)
             });
             paintSidebar();
-            APP.ui.toast("已提交领域专家裁决，并同步更新疑难问题说明文档");
+            APP.ui.toast("专家裁决已记录，并同步更新疑难问题说明文档", "ok");
           }
         }
       ]
@@ -361,15 +528,6 @@
       var btn = e.target.closest("[data-act]");
       if (!btn) return;
       var act = btn.getAttribute("data-act");
-      if (act === "expert") {
-        if (!canExpert) { APP.ui.toast("只读模式：当前角色不能提交专家裁决", "warn"); return; }
-        expertModal();
-        return;
-      }
-      if (!canAdj && act !== "filter" && act !== "single") {
-        APP.ui.toast("只读模式：当前角色不能执行裁定操作", "warn");
-        return;
-      }
       if (act === "filter") {
         store.filter = btn.getAttribute("data-f");
         var vis = visibleDiffs();
@@ -386,16 +544,43 @@
         paintList();
         return;
       }
+      if (act === "expert") {
+        if (!canExpert) { APP.ui.toast("只读模式：当前角色不能提交专家裁决", "warn"); return; }
+        if (currentPendingExpert()) { APP.ui.toast("该任务/文书已提交专家裁决，等待处理", "warn"); return; }
+        expertModal();
+        return;
+      }
+      if (act === "expert-verdict") {
+        if (!canVerdict) { APP.ui.toast("只读模式：当前角色不能执行专家裁决", "warn"); return; }
+        var rec = findExpert(btn.getAttribute("data-id"));
+        if (rec) expertVerdictModal(rec);
+        return;
+      }
+      if (!canAdj) { APP.ui.toast("只读模式：当前角色不能执行裁定操作", "warn"); return; }
       if (act === "finish") { finish(); return; }
       var d = find(btn.getAttribute("data-id"));
       if (!d) return;
-      if (act === "accept-a") resolve(d, "认可 A：" + d.a);
-      if (act === "accept-b") resolve(d, "认可 B：" + d.b);
+      if (act === "accept-a") {
+        APP.ui.confirm("确认认可标注员 A（刘标注）的结果？", function () { resolve(d, "认可 A：" + d.a); });
+        return;
+      }
+      if (act === "accept-b") {
+        APP.ui.confirm("确认认可标注员 B（陈标注）的结果？", function () { resolve(d, "认可 B：" + d.b); });
+        return;
+      }
+      if (act === "confirm") {
+        APP.ui.confirm("确认通过该单版本标注结果？", function () { resolve(d, "确认通过（单版本）"); });
+        return;
+      }
+      if (act === "withdraw") { withdraw(d); return; }
       if (act === "rebook" || act === "revise") rebook(d);
-      if (act === "confirm") resolve(d, "确认通过（单版本）");
     });
     root.addEventListener("change", function (e) {
-      var sel = e.target && e.target.closest ? e.target.closest("[data-view-as]") : null;
+      var t = e.target;
+      if (!t || !t.hasAttribute) return;
+      if (t.hasAttribute("data-task-switch")) { switchTask(t.value); return; }
+      if (t.hasAttribute("data-doc-switch")) { switchDoc(t.value); return; }
+      var sel = t.closest ? t.closest("[data-view-as]") : null;
       if (!sel) return;
       store.viewAs = sel.value === "B" ? "B" : "A";
       var el = host.querySelector('[data-slot="mycompare"]');
@@ -407,9 +592,14 @@
     title: "裁定工作台",
     render: function (root) {
       canAdj = ["adjudicator", "admin"].indexOf(APP.role()) !== -1;
-      canExpert = ["expert", "admin"].indexOf(APP.role()) !== -1;
+      canExpert = ["adjudicator", "admin"].indexOf(APP.role()) !== -1;
+      canVerdict = ["expert", "admin"].indexOf(APP.role()) !== -1;
       host = root;
       ensure();
+      var t0 = currentTask();
+      if (t0) APP.state.currentTaskId = t0.id;
+      var d0 = currentDoc();
+      if (d0) APP.state.currentDocId = d0.id;
       APP.ui.addStyle("view-adjudicate",
         ".adj-layout{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:14px;align-items:start}\n" +
         ".adj-main{display:flex;flex-direction:column;gap:10px;min-width:0}\n" +

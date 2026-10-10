@@ -6,6 +6,7 @@
   var ADJUDICATORS = ["王仲裁", "孙专家"];
   var TEACHING_ADJUDICATORS = ["赵老师", "王仲裁", "孙专家"];
   var TASK_TYPES = ["科研标注", "教学练习"];
+  var GUIDE_SCOPES = ["全部任务", "科研标注任务", "教学练习任务"];
   var CASE_KINDS = ["民事", "刑事", "行政", "执行", "国家赔偿"];
   var GUIDE_GROUPS = [
     { key: "nonProps", title: "非命题要素" },
@@ -343,6 +344,7 @@
       }
 
       function step4Html() {
+        var scopeValue = GUIDE_SCOPES.indexOf(guide.scope) >= 0 ? guide.scope : GUIDE_SCOPES[0];
         var html = '<div class="card mb12">' +
           '<div class="row"><div><h3 style="margin:0">指南文件</h3><div class="small muted mt8">系统当前版本：<span class="code-chip">' + APP.esc(guide.version) + "</span>（" + APP.esc(guide.importedAt) + "）</div></div>" +
           '<span class="spacer"></span>' +
@@ -366,7 +368,9 @@
           (isAdmin
             ? '<div class="card"><h3>登记版本</h3>' +
               '<div class="form-row"><label>版本号</label><input type="text" data-ver="version" value="' + APP.esc(guide.version) + '"></div>' +
-              '<div class="form-row"><label>适用范围</label><input type="text" data-ver="scope" value="' + APP.esc(guide.scope) + '"></div>' +
+              '<div class="form-row"><label>适用范围</label><select data-ver="scope">' + GUIDE_SCOPES.map(function (s) {
+                return '<option value="' + APP.esc(s) + '"' + (s === scopeValue ? " selected" : "") + ">" + APP.esc(s) + "</option>";
+              }).join("") + "</select></div>" +
               '<div class="form-row"><label>操作人</label><input type="text" data-ver="operator" value="' + APP.esc(guide.operator) + '"></div>' +
               '<div class="form-row"><label>说明</label><textarea rows="2" data-ver="note" placeholder="本次指南的主要变化…"></textarea></div>' +
               '<button type="button" class="btn primary" data-register>登记版本</button></div>'
@@ -671,7 +675,9 @@
           if (!note) note = "—";
           history.push({ version: version, date: today(), operator: operator, note: note, scope: scope });
           selectedVersion = version;
-          APP.ui.toast("指南版本已登记（历史版本只读保留，重复版本号按新版本登记）", "ok");
+          APP.ui.toast(dup
+            ? "指南版本已登记（重复版本号按新版本登记，历史版本只读保留）"
+            : "指南版本已登记（历史版本只读保留）", "ok");
           var host = contentEl.querySelector("[data-guide-history]");
           if (host) host.innerHTML = historyHtml(history);
           refreshVersionPick();
